@@ -378,8 +378,8 @@ object VoiceMvpClient {
             (if (memoryText.isNotBlank()) "\n\n$memoryText\n" else "") +
             buildRoleContext(context, question)
         val turns = JSONArray()
-        // 近 12 轮作为对话格式的短期上下文；更早的靠 workingSummary 与记忆检索覆盖
-        for ((role, content) in recentTurns.takeLast(12)) {
+        // 近 30 轮作为对话格式的短期上下文；更早的靠 workingSummary 与记忆检索覆盖
+        for ((role, content) in recentTurns.takeLast(30)) {
             turns.put(JSONObject().put("role", role).put("content", content))
         }
         val forcedTool = detectTool(question)
