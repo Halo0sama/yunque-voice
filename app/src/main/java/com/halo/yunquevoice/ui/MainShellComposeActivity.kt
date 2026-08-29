@@ -25,6 +25,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,11 +35,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,10 +52,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -111,11 +119,15 @@ import io.github.nadeemiqbal.liquidglass.GlassCard
 import io.github.nadeemiqbal.liquidglass.GlassNavBar
 import io.github.nadeemiqbal.liquidglass.liquidGlass
 import io.github.nadeemiqbal.liquidglass.rememberLiquidGlassState
+import com.halo.yunquevoice.memory.ConversationRecord
 import com.halo.yunquevoice.memory.MemoryDb
 import com.halo.yunquevoice.memory.RelationshipRecord
 import com.halo.yunquevoice.memory.SpeakerProfile
+import com.halo.yunquevoice.memory.WorkingMemory
 import com.halo.yunquevoice.service.AlwaysOnListeningService
+import com.halo.yunquevoice.voice.MemoryUploader
 import com.halo.yunquevoice.voice.Store
+import com.halo.yunquevoice.voice.VoiceMvpClient
 import com.halo.yunquevoice.voice.VoiceMvpLog
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -130,8 +142,19 @@ import kotlin.math.sin
 
 class MainShellComposeActivity : ComponentActivity() {
 
+    companion object {
+        // 通知点击"云雀有话要说"时请求打开对话面板；AppShell 消费后复位
+        val openChatTab = androidx.compose.runtime.mutableStateOf(false)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        if (intent?.getStringExtra("open_tab") == "chat") openChatTab.value = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent?.getStringExtra("open_tab") == "chat") openChatTab.value = true
         enableEdgeToEdge()
         setContent {
             GlassMaterialTheme {
@@ -201,6 +224,7 @@ private fun CrashRecoveryScreen(logText: String, onClear: () -> Unit) {
 
 private enum class ShellTab(val label: String, val icon: ImageVector) {
     Home("首页", Icons.Filled.Home),
+    Chat("对话", Icons.Filled.Chat),
     Memory("记忆", Icons.Filled.MenuBook),
     People("人物", Icons.Filled.Person),
     Settings("设置", Icons.Filled.Settings)
@@ -233,7 +257,15 @@ private fun YunqueMaterialTheme(content: @Composable () -> Unit) {
 @Composable
 private fun AppShell() {
     val context = LocalContext.current
-    var tab by mutableStateOf(ShellTab.Home)
+    val openChat = (context as? android.app.Activity)?.intent?.getStringExtra("open_tab") == "chat"
+    // remember 必须保留：否则每次 recompose 都会重建 state，把通知跳转设置的 tab 打回首页
+    var tab by remember { mutableStateOf(if (openChat) ShellTab.Chat else ShellTab.Home) }
+    LaunchedEffect(MainShellComposeActivity.openChatTab.value) {
+        if (MainShellComposeActivity.openChatTab.value) {
+            tab = ShellTab.Chat
+            MainShellComposeActivity.openChatTab.value = false
+        }
+    }
     val glass = Store.themeMode(context) == Store.THEME_GLASS || Store.themeMode(context) == Store.THEME_GLASS17
     Scaffold(
         containerColor = if (glass) Color.Transparent else MaterialTheme.colorScheme.background,
@@ -284,18 +316,24 @@ private fun AppShell() {
             }
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(20.dp)
-        ) {
-            when (tab) {
-                ShellTab.Home -> HomeScreen(context)
-                ShellTab.Memory -> MemoryScreen(context)
-                ShellTab.People -> PeopleScreen(context)
-                ShellTab.Settings -> SettingsScreen(context)
+        if (tab == ShellTab.Chat) {
+            // 聊天面板自带 LazyColumn，不进外层 verticalScroll，避免同向嵌套滚动
+            ChatScreen(context, Modifier.padding(padding))
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp)
+            ) {
+                when (tab) {
+                    ShellTab.Home -> HomeScreen(context)
+                    ShellTab.Memory -> MemoryScreen(context)
+                    ShellTab.People -> PeopleScreen(context)
+                    ShellTab.Settings -> SettingsScreen(context)
+                    else -> {}
+                }
             }
         }
     }
@@ -403,6 +441,148 @@ private fun HomeScreen(context: android.content.Context) {
     }
 
     Spacer(Modifier.size(20.dp))
+}
+
+@Composable
+private fun ChatScreen(context: android.content.Context, modifier: Modifier = Modifier) {
+    val db = remember { MemoryDb(context) }
+    val scope = rememberCoroutineScope()
+    var messages by remember { mutableStateOf(db.recentConversations(200).asReversed()) }
+    var input by remember { mutableStateOf("") }
+    var thinking by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val timeFmt = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()) }
+
+    // 面板可见时轮询时间线：语音旁听、仅聆听文字回应都会实时冒出来
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            val fresh = db.recentConversations(200).asReversed()
+            if (fresh.size != messages.size || fresh.lastOrNull()?.id != messages.lastOrNull()?.id) {
+                messages = fresh
+            }
+        }
+    }
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.scrollToItem(messages.size - 1)
+    }
+
+    fun send() {
+        val text = input.trim()
+        if (text.isEmpty() || thinking) return
+        input = ""
+        val speaker = Store.myName(context).ifBlank { "主人" }
+        val turns = db.recentConversations(30).asReversed().map { c ->
+            if (c.origin == "assistant") "assistant" to c.text
+            else "user" to "（${c.speakerName ?: "某人"}说）${c.text}"
+        }
+        db.addConversation(
+            ConversationRecord(id = 0, ts = System.currentTimeMillis(), speakerId = null, speakerName = speaker, text = text, origin = "user")
+        )
+        // 上云规则与聆听模式划等号：同一条簇合并/verbatim 链路
+        MemoryUploader.enqueue(context, db, text, speaker)
+        WorkingMemory.stat(db, "chat_typed")
+        thinking = true
+        scope.launch {
+            runCatching {
+                VoiceMvpClient.chat(
+                    Store.deepSeekKey(context), text, context,
+                    recentTurns = turns, workingSummary = db.loadSessionState().summary
+                )
+            }.onSuccess { reply ->
+                if (reply.isNotBlank()) {
+                    db.addConversation(
+                        ConversationRecord(id = 0, ts = System.currentTimeMillis(), speakerId = null, speakerName = "云雀", text = reply, origin = "assistant")
+                    )
+                    WorkingMemory.stat(db, "chat_reply")
+                }
+            }.onFailure {
+                WorkingMemory.stat(db, "chat_reply_fail")
+                VoiceMvpLog.w("CHAT", "打字回复失败: ${it.message}")
+            }
+            thinking = false
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize().imePadding()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (messages.isEmpty()) {
+                item {
+                    Text(
+                        "和云雀说点什么吧——这里与语音聆听共用同一段对话和记忆。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(messages, key = { it.id }) { m ->
+                val isLark = m.origin == "assistant"
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = if (isLark) Arrangement.Start else Arrangement.End
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isLark) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primaryContainer
+                        ),
+                        shape = RoundedCornerShape(
+                            topStart = 16.dp, topEnd = 16.dp,
+                            bottomStart = if (isLark) 4.dp else 16.dp,
+                            bottomEnd = if (isLark) 16.dp else 4.dp
+                        ),
+                        modifier = Modifier.widthIn(max = 300.dp)
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(m.text)
+                            Text(
+                                (if (isLark) "云雀 · " else "") + timeFmt.format(java.util.Date(m.ts)),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            if (thinking) {
+                item {
+                    Text(
+                        "云雀正在想…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                }
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("给云雀发消息") },
+                shape = RoundedCornerShape(24.dp),
+                maxLines = 4
+            )
+            Spacer(Modifier.size(8.dp))
+            IconButton(
+                onClick = { send() },
+                enabled = !thinking && input.isNotBlank(),
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp))
+            ) {
+                Icon(Icons.Filled.Send, contentDescription = "发送")
+            }
+        }
+    }
 }
 
 @Composable
@@ -763,6 +943,8 @@ private fun SettingsScreen(context: android.content.Context) {
     var showNotifSheet by remember { mutableStateOf(false) }
     var stopNotif by remember { mutableStateOf(Store.notificationControlEnabled(context)) }
     var interruptNotif by remember { mutableStateOf(Store.notificationInterruptEnabled(context)) }
+    var showListenSheet by remember { mutableStateOf(false) }
+    var textReply by remember { mutableStateOf(Store.listenOnlyTextReply(context)) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     QuickNav("AI 与接口") { showAiCard = true }
@@ -770,6 +952,31 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("Operit 接入") { showOperit = true }
     QuickNav("自定义音色") { showVoiceSheet = true }
     QuickNav("通知栏控制") { showNotifSheet = true }
+    QuickNav("仅聆听与对话") { showListenSheet = true }
+    if (showListenSheet) {
+        YunqueBottomSheet(onDismiss = { showListenSheet = false }) {
+            Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+                Text("仅聆听", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "仅聆听时云雀只听不说。\u201c云雀有话要说\u201d决定它是否用文字在对话面板里回应：关闭则完全沉默、零消耗。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = {
+                        val next = !textReply
+                        Store.saveListenOnlyTextReply(context, next)
+                        textReply = next
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (textReply) "✓ 云雀有话要说（文字回应，正常消耗决策）"
+                        else "云雀有话要说（关闭 = 完全沉默零消耗）"
+                    )
+                }
+            }
+        }
+    }
     if (showNotifSheet) {
         YunqueBottomSheet(onDismiss = { showNotifSheet = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {

@@ -210,11 +210,13 @@ object VoiceMvpClient {
         user: String,
         context: Context?,
         label: String,
-        forcedTool: String? = null
+        forcedTool: String? = null,
+        prefixTurns: JSONArray = JSONArray()
     ): String = withContext(Dispatchers.IO) {
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
-            .put(JSONObject().put("role", "user").put("content", user))
+        for (i in 0 until prefixTurns.length()) messages.put(prefixTurns.getJSONObject(i))
+        messages.put(JSONObject().put("role", "user").put("content", user))
         var answer = ""
         val toolDefs = toolDefinitions()
         if (context != null && OperitClient.isConfigured(context)) {
@@ -343,7 +345,13 @@ object VoiceMvpClient {
             content
         }
 
-    suspend fun chat(deepSeekKey: String, question: String, context: Context? = null): String {
+    suspend fun chat(
+        deepSeekKey: String,
+        question: String,
+        context: Context? = null,
+        recentTurns: List<Pair<String, String>> = emptyList(),
+        workingSummary: String = ""
+    ): String {
         VoiceMvpLog.i("LLM", "开始思考: question=${question.take(200)}")
         val memoryText = if (context != null && Store.cloudMemoryEnabled(context)) {
             runCatching { BailianMemory.search(context, question) }
@@ -353,12 +361,18 @@ object VoiceMvpClient {
                 }
                 .joinToString("\n") { "记忆中：${it.content}" }
         } else ""
+        val summaryText = if (workingSummary.isBlank()) "" else "\n【近期对话摘要】\n$workingSummary\n"
         val system = "你是云雀。回答要简短、口语化，适合直接读出来；不要用 Markdown、列表或代码块，尽量控制在两三句话。" +
             "当用户询问时间、日期或电量时，请调用对应工具获取真实信息后再回答。" +
+            summaryText +
             (if (memoryText.isNotBlank()) "\n\n$memoryText\n" else "") +
             buildRoleContext(context, question)
+        val turns = JSONArray()
+        for ((role, content) in recentTurns.takeLast(30)) {
+            turns.put(JSONObject().put("role", role).put("content", content))
+        }
         val forcedTool = detectTool(question)
-        val answer = completeWithTools(deepSeekKey, system, question, context, "LLM", forcedTool)
+        val answer = completeWithTools(deepSeekKey, system, question, context, "LLM", forcedTool, turns)
         require(answer.isNotEmpty()) { "DeepSeek 返回空回答" }
         VoiceMvpLog.i("LLM", "最终回答: ${answer.take(200)}")
         return answer

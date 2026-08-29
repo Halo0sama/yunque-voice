@@ -27,6 +27,7 @@ object Store {
     private const val KEY_NOTIFICATION_CONTROL = "notification_control"
     private const val KEY_NOTIFICATION_INTERRUPT = "notification_interrupt"
     private const val KEY_LISTEN_ONLY = "listen_only"
+    private const val KEY_LISTEN_ONLY_TEXT_REPLY = "listen_only_text_reply"
 
     // 1 = 只在该说时说；2 = 更主动旁听建议；3 = 只响应“云雀”唤醒
     const val LISTEN_MODE_SAFE = 1
@@ -70,6 +71,16 @@ object Store {
     fun saveListenOnly(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
             putBoolean(KEY_LISTEN_ONLY, enabled)
+        }
+    }
+
+    /** 云雀有话要说：仅聆听时决策照跑，回复以文字写进对话面板（不播报）。关闭则完全沉默零消耗。 */
+    fun listenOnlyTextReply(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_LISTEN_ONLY_TEXT_REPLY, true)
+
+    fun saveListenOnlyTextReply(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putBoolean(KEY_LISTEN_ONLY_TEXT_REPLY, enabled)
         }
     }
 

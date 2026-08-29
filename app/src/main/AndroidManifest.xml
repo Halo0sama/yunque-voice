@@ -24,6 +24,7 @@
         <activity
             android:name=".ui.MainShellComposeActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="云雀·私人助理">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

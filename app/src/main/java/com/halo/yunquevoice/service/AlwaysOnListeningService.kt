@@ -28,6 +28,7 @@ import com.halo.yunquevoice.memory.SpeakerProfile
 import com.halo.yunquevoice.memory.WorkingMemory
 import com.halo.yunquevoice.ui.MainShellComposeActivity
 import com.halo.yunquevoice.voice.BailianMemory
+import com.halo.yunquevoice.voice.MemoryUploader
 import com.halo.yunquevoice.voice.DashScopeFiletrans
 import com.halo.yunquevoice.voice.DashScopeUpload
 import com.halo.yunquevoice.voice.InterruptionRecord
@@ -71,9 +72,8 @@ class AlwaysOnListeningService : Service() {
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
         const val NOTIF_ID = 1001
+        const val NOTIF_CHAT_ID = 1003
         const val SAMPLE_RATE = 16000
-        private const val UPLOAD_BATCH_MAX = 24
-        private const val UPLOAD_IDLE_MS = 120_000L
 
         @Volatile
         var isRunning = false
@@ -105,10 +105,6 @@ class AlwaysOnListeningService : Service() {
     private val pendingSegments = mutableListOf<PendingSegment>()
     private val cloudSpeakerMap = HashMap<Int, String>()
 
-    // 会话簇合并上传：攒一批再上云（计费按次），静默/满额/停服务三条件冲刷
-    private val pendingUploads = mutableListOf<BailianMemory.UploadItem>()
-    private val uploadLock = Any()
-    @Volatile private var uploadIdleScheduled = false
     @Volatile private var compacting = false
     @Volatile private var diarizationRunning = false
     @Volatile private var inSpeech = false
@@ -174,13 +170,8 @@ class AlwaysOnListeningService : Service() {
             ACTION_TEST_TRANSCRIPT -> {
                 val text = intent?.getStringExtra("text") ?: "云雀，你觉得这件事怎么办？"
                 VoiceMvpLog.i("SERVICE", "收到测试旁听文本：$text")
-                // 测试钩子：模拟真实片段入上传簇，让簇合并链路可以纯文本验证
-                if (Store.cloudMemoryEnabled(this)) {
-                    synchronized(uploadLock) {
-                        pendingUploads.add(BailianMemory.UploadItem(text, "主人", System.currentTimeMillis()))
-                    }
-                    scheduleIdleFlush()
-                }
+                // 测试钩子：与真实片段同一条上云链路（噪声门/verbatim/簇合并）
+                MemoryUploader.enqueue(this, memoryDb, text, "主人")
                 scope.launch { handleTranscriptText(text) }
             }
             ACTION_TEST_UPLOAD -> {
@@ -447,6 +438,17 @@ class AlwaysOnListeningService : Service() {
                 }
                 segmentBuffer.write(chunk)
                 silenceMs = 0
+                // 硬顶：单段最长 30 秒强制切段。持续环境噪声（电视/马路/房间底噪）会让
+                // 600ms 静音判定永远等不到，缓冲会一直涨到 OOM
+                if (segmentBuffer.size() >= SAMPLE_RATE * 2 * 30) {
+                    val seg = segmentBuffer.toByteArray()
+                    segmentBuffer.reset()
+                    preRoll.clear()
+                    if (seg.size > SAMPLE_RATE * 2 / 10 * 6) {
+                        segmentQueue.offer(seg)
+                        drainQueue()
+                    }
+                }
             } else if (inSpeech) {
                 // 尾部静音缓冲：仍写入，直到确定结束
                 segmentBuffer.write(chunk)
@@ -526,17 +528,8 @@ class AlwaysOnListeningService : Service() {
         )
         VoiceMvpLog.i("MEMORY", "已记录说话人「${speaker.name}」: ${text.take(80)}")
         WorkingMemory.stat(memoryDb, "segments_captured")
-        // 云端记忆：会话簇合并上传（一次调用带整簇），失败整批进 outbox
-        val clean = text.filter { !it.isWhitespace() }
-        if (Store.cloudMemoryEnabled(this) && (clean.length >= 4 || isMemoryCommand(text))) {
-            val flushNow = synchronized(uploadLock) {
-                pendingUploads.add(BailianMemory.UploadItem(text, speaker.name, System.currentTimeMillis()))
-                pendingUploads.size >= UPLOAD_BATCH_MAX
-            }
-            if (flushNow) flushUploadsAsync() else scheduleIdleFlush()
-        } else if (clean.length < 4) {
-            WorkingMemory.stat(memoryDb, "noise_filtered")
-        }
+        // 云端记忆统一入口：噪声门 / 记住 verbatim / 会话簇合并
+        MemoryUploader.enqueue(this, memoryDb, text, speaker.name)
         pendingSegments.add(PendingSegment(seg, text, convId, speaker.id))
         if (pendingSegments.size >= 4 && !diarizationRunning) {
             scope.launch { runCloudDiarization() }
@@ -553,51 +546,9 @@ class AlwaysOnListeningService : Service() {
         handleTranscriptText(text)
     }
 
-    private fun isMemoryCommand(text: String): Boolean =
-        text.contains("记住") || text.contains("记一下") ||
-            text.contains("别忘了") || text.contains("你要记住")
+    private fun isMemoryCommand(text: String): Boolean = MemoryUploader.isMemoryCommand(text)
 
-    /* ───────────── 会话簇上传与工作记忆压缩 ───────────── */
-
-    private fun scheduleIdleFlush() {
-        if (uploadIdleScheduled) return
-        uploadIdleScheduled = true
-        mainHandler.postDelayed({
-            uploadIdleScheduled = false
-            flushUploadsAsync()
-        }, UPLOAD_IDLE_MS)
-    }
-
-    private fun flushUploadsAsync() {
-        val batch = synchronized(uploadLock) {
-            if (pendingUploads.isEmpty()) return
-            val b = pendingUploads.toList()
-            pendingUploads.clear()
-            b
-        }
-        WorkingMemory.stat(memoryDb, "upload_calls")
-        WorkingMemory.stat(memoryDb, "upload_sentences", batch.size.toDouble())
-        scope.launch {
-            runCatching { BailianMemory.appendBatchReliably(this@AlwaysOnListeningService, batch) }
-                .onFailure { VoiceMvpLog.w("BAILIAN", "簇上传失败（整批入 outbox）: ${it.message}") }
-        }
-    }
-
-    /** 服务停止路径用：独立协程，不受 scope.cancel 影响，保证欠账冲出去。 */
-    private fun flushUploadsOnStop() {
-        val batch = synchronized(uploadLock) {
-            if (pendingUploads.isEmpty()) return
-            val b = pendingUploads.toList()
-            pendingUploads.clear()
-            b
-        }
-        WorkingMemory.stat(memoryDb, "upload_calls")
-        WorkingMemory.stat(memoryDb, "upload_sentences", batch.size.toDouble())
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            runCatching { BailianMemory.appendBatchReliably(this@AlwaysOnListeningService, batch) }
-                .onFailure { VoiceMvpLog.w("BAILIAN", "停止前簇上传失败（整批入 outbox）: ${it.message}") }
-        }
-    }
+    /* ───────────── 工作记忆压缩 ───────────── */
 
     /** 惰性压缩：跨天第一句，或工作窗口超保险丝。并发用 compacting 标志挡。 */
     private suspend fun maybeCompact() {
@@ -726,27 +677,14 @@ class AlwaysOnListeningService : Service() {
             VoiceMvpLog.w("SERVICE", "keys missing, skip transcript")
             return
         }
-        if (isMemoryCommand(text)) {
-            val memoryText = text
-                .replace(Regex("^云雀[，,。！!：:]?"), "")
-                .replace(Regex("^(请|麻烦)?(你)?(帮我)?(记住|记一下|别忘了|你要记住)[:：]?"), "")
-                .trim()
-            if (memoryText.isNotEmpty() && Store.cloudMemoryEnabled(this)) {
-                val svc = this
-                val owner = Store.myName(this).ifBlank { "主人" }
-                scope.launch {
-                    runCatching { BailianMemory.appendReliably(svc, memoryText, owner, verbatim = true) }
-                        .onSuccess { VoiceMvpLog.i("MEMORY", "手动记忆已上云: $memoryText") }
-                        .onFailure { VoiceMvpLog.w("MEMORY", "手动记忆已入 outbox: $memoryText") }
-                }
-            }
-        }
         VoiceMvpLog.i("SERVICE", "旁听: $text")
 
-        // 仅聆听：对话记录、记忆提炼照常，只是不决策、不播报
-        if (Store.listenOnlyEnabled(this)) {
+        // 仅聆听两档：文字回应（决策照跑，回复写对话面板不播报）/ 完全沉默（跳过决策零消耗）
+        val listenOnly = Store.listenOnlyEnabled(this)
+        val textReplyMode = listenOnly && Store.listenOnlyTextReply(this)
+        if (listenOnly && !textReplyMode) {
             VoiceMvpLog.i("SERVICE", "仅聆听模式：跳过决策与播报，仅保留记录")
-            updateNotification("仅聆听中（刚旁听一句，保持安静）", interrupting = true)
+            updateNotification("仅聆听中（保持安静）", interrupting = true)
             broadcastStatus("listening")
             return
         }
@@ -796,6 +734,25 @@ class AlwaysOnListeningService : Service() {
         }
         WorkingMemory.stat(memoryDb, "decide_speak")
 
+        // 云雀有话要说：仅聆听下不合成不播报，回复写进对话时间线并弹轻通知
+        if (textReplyMode) {
+            WorkingMemory.stat(memoryDb, "text_reply")
+            memoryDb.addConversation(
+                ConversationRecord(
+                    id = 0,
+                    ts = System.currentTimeMillis(),
+                    speakerId = null,
+                    speakerName = "云雀",
+                    text = reply,
+                    origin = "assistant"
+                )
+            )
+            postChatNotification(reply)
+            updateNotification("云雀有话要说（已写入对话面板）", interrupting = true)
+            broadcastStatus("listening")
+            return
+        }
+
         VoiceMvpLog.i("SERVICE", "决策：开口 -> ${reply.take(120)}")
         val ttsFile = File(cacheDir, "yunque_proactive.wav")
         val ok = runCatching { VoiceMvpClient.synthesize(dashKey, reply, ttsFile, Store.voiceId(this@AlwaysOnListeningService).ifBlank { null }) }
@@ -815,6 +772,26 @@ class AlwaysOnListeningService : Service() {
             )
         )
         playTts(reply, ttsFile)
+    }
+
+    private fun postChatNotification(reply: String) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val open = PendingIntent.getActivity(
+            this, 5,
+            Intent(this, MainShellComposeActivity::class.java)
+                .putExtra("open_tab", "chat")
+                // CLEAR_TOP 触发销毁重建，onCreate 直接以对话 Tab 为初值（避免跨层状态通知的时序坑）
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notif = Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle("云雀有话要说")
+            .setContentText(reply.take(60))
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(NOTIF_CHAT_ID, notif)
     }
 
     private fun playTts(text: String, file: File) {
@@ -906,7 +883,7 @@ class AlwaysOnListeningService : Service() {
     /* ───────────── 工具 ───────────── */
 
     private fun stopEverything() {
-        flushUploadsOnStop()
+        MemoryUploader.flush()
         notificationManager?.cancel(NOTIF_INTERRUPT_ID)
         stopCapture()
         interruptPlaybackSilently()

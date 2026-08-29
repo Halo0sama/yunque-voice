@@ -57,6 +57,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ### UI（Compose）
 - `MainShellComposeActivity`：主界面 + 悬浮玻璃底栏 + Crash 兼容模式。
+- 五个 Tab：首页 / **对话**（v0.7.0，读 conversations 时间线，打字链路=chat()+MemoryUploader 上云，与语音同一记忆；仅聆听文字回应也显示在此）/ 记忆 / 人物 / 设置。
 - `AboutMeComposeActivity`：关于我（姓名/声纹/记录）。
 - `PersonProfileComposeActivity`：人物档案。
 - `RoleCardComposeActivity`：角色卡管理。
@@ -64,6 +65,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `VoiceCloneComposeActivity`：自定义音色/自带音色/试听。
 - `VoiceManagerComposeActivity`：身边的人（筛选/声音列表/重命名/删除/样本试听）。
 - `GlassTheme.kt`：多主题与玻璃组件。
+- 注意：AppShell 的 tab state 必须 remember（否则 recompose 重建会把通知跳转设置的 tab 打回首页，v0.7.0 修复）。
+
+### 仅聆听与"云雀有话要说"（v0.7.0）
+- 仅聆听两档：`Store.listenOnlyTextReply`（默认开）= 决策照跑，回复不 TTS，写 conversations + 轻通知 1003（CLEAR_TOP 销毁重建跳对话 Tab）；关 = 跳过决策零消耗。
+- 设置 → 仅聆听与对话 底栏 sheet 切换。
+- 打字输入：ChatScreen send() → conversations(origin=user, speaker=主人称呼) → MemoryUploader.enqueue（与聆听同一噪声门/verbatim/簇合并链路）→ chat()(recentTurns=conversations 最近30轮 + workingSummary) → 回复写 conversations。
 - `MainShellActivity` 等旧 View 已删除，工程为纯 Compose。
 
 ## 主题
@@ -132,9 +139,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 本地/云端说话人可能重复，后续做合并策略
 - 自定义音色上传依赖阿里云临时 OSS；本地录制上传链路已通
 - 真机 Android 16/17 曾有 16KB 对齐警告，已切换 16KB 对齐 ffmpeg-kit 修复
-- 记忆逐句上传按 AddMemory 计次计费（默认规则 Pro ¥0.03/次，可在控制台把记忆片段规则改 Lite 降到 ¥0.018）；后续可加“60 秒合并上传”开关省 50-70%
+- 记忆簇合并按 AddMemory 计次计费（默认规则 Pro ¥0.03/次，可在控制台把记忆片段规则改 Lite 降到 ¥0.018）；后续可加“60 秒合并上传”开关省 50-70%
 - 记忆片段规则默认 180 天过期（控制台可改），陪伴场景建议调长
 - 云端记忆商业化后需 workspace 头 + memory_library_id，缺一会报 ServiceNotOpened
+- VAD 段缓冲已有 30 秒硬顶（v0.7.0）：持续环境噪声曾致缓冲无限增长 OOM（209MB，Mac 底噪实锤触发）
+- 仅聆听文字回应档每句照常消耗决策调用；打字对话的"hi"这类短句会被噪声门过滤不上云（≥4 字才传）
 
 ## 关键文件路径
 - 主界面：`app/src/main/java/com/halo/yunquevoice/ui/MainShellComposeActivity.kt`
