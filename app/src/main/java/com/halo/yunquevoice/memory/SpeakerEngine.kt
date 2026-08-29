@@ -41,7 +41,10 @@ object SpeakerEngine {
             db.upsertSpeaker(updated)
             return updated
         }
-        val next = db.getSpeakers().size + 1
+        // 编号 = 现存所有"未知N"的最大 N + 1：改名/删除档案后也不会与在用编号撞车
+        val next = (speakers.maxOfOrNull { s ->
+            Regex("^未知(\\d+)$").find(s.name)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        } ?: 0) + 1
         val created = SpeakerProfile(
             id = UUID.randomUUID().toString(),
             name = "未知$next",
