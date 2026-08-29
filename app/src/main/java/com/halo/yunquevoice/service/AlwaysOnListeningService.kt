@@ -22,8 +22,6 @@ import android.util.Log
 import com.halo.yunquevoice.memory.ConversationRecord
 import com.halo.yunquevoice.memory.AboutMeExtractor
 import com.halo.yunquevoice.memory.MemoryDb
-import com.halo.yunquevoice.memory.MemoryExtractor
-import com.halo.yunquevoice.memory.MemoryRetriever
 import com.halo.yunquevoice.memory.RelationshipExtractor
 import com.halo.yunquevoice.memory.SpeakerEngine
 import com.halo.yunquevoice.memory.SpeakerProfile
@@ -124,6 +122,7 @@ class AlwaysOnListeningService : Service() {
                 startAsForeground()
                 startCapture()
                 YunqueApiServer.start(this)
+                scope.launch { runCatching { BailianMemory.flushOutbox(this@AlwaysOnListeningService) } }
                 broadcastStatus("listening")
             }
             ACTION_STOP -> {
@@ -497,6 +496,16 @@ class AlwaysOnListeningService : Service() {
             )
         )
         VoiceMvpLog.i("MEMORY", "已记录说话人「${speaker.name}」: ${text.take(80)}")
+        // 云端记忆：每句必传（verbatim + 说话人元数据），失败进 outbox 稍后重发
+        val clean = text.filter { !it.isWhitespace() }
+        if (Store.cloudMemoryEnabled(this) && (clean.length >= 4 || isMemoryCommand(text))) {
+            val svc = this
+            val spName = speaker.name
+            scope.launch {
+                runCatching { BailianMemory.appendReliably(svc, text, spName) }
+                    .onFailure { VoiceMvpLog.w("BAILIAN", "记忆写入失败（已入 outbox）: ${it.message}") }
+            }
+        }
         pendingSegments.add(PendingSegment(seg, text, convId, speaker.id))
         if (pendingSegments.size >= 4 && !diarizationRunning) {
             scope.launch { runCloudDiarization() }
@@ -505,14 +514,7 @@ class AlwaysOnListeningService : Service() {
         if (pendingMemoryCount >= 5) {
             pendingMemoryCount = 0
             val key = Store.deepSeekKey(this)
-            val dash = dashKey
             scope.launch {
-                if (Store.cloudMemoryEnabled(this@AlwaysOnListeningService)) {
-                    runCatching {
-                        BailianMemory.add(dash, history.takeLast(10).map { "user" to it })
-                    }
-                }
-                MemoryExtractor.extract(memoryDb, key)
                 RelationshipExtractor.extract(memoryDb, key)
                 AboutMeExtractor.extract(memoryDb, key)
             }
@@ -634,11 +636,17 @@ class AlwaysOnListeningService : Service() {
         }
         if (isMemoryCommand(text)) {
             val memoryText = text
-                .replace(Regex("^(请|麻烦)?(你)?(记住|记一下|别忘了|你要记住)[:：]?"), "")
+                .replace(Regex("^云雀[，,。！!：:]?"), "")
+                .replace(Regex("^(请|麻烦)?(你)?(帮我)?(记住|记一下|别忘了|你要记住)[:：]?"), "")
                 .trim()
-            if (memoryText.isNotEmpty()) {
-                memoryDb.addMemory(memoryText)
-                VoiceMvpLog.i("MEMORY", "手动记忆已保存: $memoryText")
+            if (memoryText.isNotEmpty() && Store.cloudMemoryEnabled(this)) {
+                val svc = this
+                val owner = Store.myName(this).ifBlank { "主人" }
+                scope.launch {
+                    runCatching { BailianMemory.appendReliably(svc, memoryText, owner, verbatim = true) }
+                        .onSuccess { VoiceMvpLog.i("MEMORY", "手动记忆已上云: $memoryText") }
+                        .onFailure { VoiceMvpLog.w("MEMORY", "手动记忆已入 outbox: $memoryText") }
+                }
             }
         }
         history.addLast(text)
@@ -655,15 +663,14 @@ class AlwaysOnListeningService : Service() {
 
         val mode = Store.listenMode(this)
         val reply = runCatching {
-            val cloudMemories = if (Store.cloudMemoryEnabled(this)) {
-                runCatching { BailianMemory.search(dashKey, text) }.getOrElse { emptyList() }
+            val memories = if (Store.cloudMemoryEnabled(this)) {
+                runCatching { BailianMemory.search(this, text).map { it.content } }
+                    .getOrElse {
+                        VoiceMvpLog.w("BAILIAN", "记忆检索失败，本次无记忆上下文: ${it.message}")
+                        emptyList()
+                    }
             } else {
                 emptyList()
-            }
-            val memories = if (cloudMemories.isNotEmpty()) {
-                cloudMemories
-            } else {
-                MemoryRetriever.select(memoryDb.listMemories(), text).map { it.content }
             }
             VoiceMvpClient.decide(
                 deepKey, mode, text, history.toList(), this,

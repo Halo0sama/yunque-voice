@@ -18,6 +18,9 @@ object Store {
     private const val KEY_MY_VOICE_DESC = "my_voice_desc"
     private const val KEY_MY_SPEAKER_ID = "my_speaker_id"
     private const val KEY_WORKSPACE = "workspace_id"
+    private const val KEY_MEMORY_LIBRARY = "memory_library_id"
+    private const val KEY_MEMORY_USER = "memory_user_id"
+    private const val KEY_LOCAL_MIGRATED = "local_memories_migrated"
     private const val KEY_OPERIT_URL = "operit_url"
     private const val KEY_OPERIT_TOKEN = "operit_token"
     private const val KEY_VOICE_ID = "voice_id"
@@ -95,11 +98,34 @@ object Store {
     fun workspaceId(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_WORKSPACE, "") ?: ""
 
-    fun saveKeys(context: Context, deepSeek: String, dashScope: String, workspace: String = "") {
+    fun memoryLibraryId(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MEMORY_LIBRARY, "") ?: ""
+
+    /** 云端记忆库的 user_id：安装级 UUID，首次调用时生成并持久化。 */
+    fun memoryUserId(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.getString(KEY_MEMORY_USER, null)?.let { return it }
+        val id = "yunque-" + java.util.UUID.randomUUID().toString().substring(0, 13)
+        prefs.edit { putString(KEY_MEMORY_USER, id) }
+        return id
+    }
+
+    /** 本地旧记忆是否已迁移上云并清空。 */
+    fun localMemoriesMigrated(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_LOCAL_MIGRATED, false)
+
+    fun setLocalMemoriesMigrated(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putBoolean(KEY_LOCAL_MIGRATED, true)
+        }
+    }
+
+    fun saveKeys(context: Context, deepSeek: String, dashScope: String, workspace: String = "", memoryLibrary: String = "") {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
             putString(KEY_DEEPSEEK, deepSeek.trim())
             putString(KEY_DASHSCOPE, dashScope.trim())
             if (workspace.isNotBlank()) putString(KEY_WORKSPACE, workspace.trim())
+            if (memoryLibrary.isNotBlank()) putString(KEY_MEMORY_LIBRARY, memoryLibrary.trim())
         }
     }
 

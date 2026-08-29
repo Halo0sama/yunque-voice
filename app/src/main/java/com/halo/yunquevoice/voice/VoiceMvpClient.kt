@@ -323,8 +323,17 @@ object VoiceMvpClient {
 
     suspend fun chat(deepSeekKey: String, question: String, context: Context? = null): String {
         VoiceMvpLog.i("LLM", "开始思考: question=${question.take(200)}")
+        val memoryText = if (context != null && Store.cloudMemoryEnabled(context)) {
+            runCatching { BailianMemory.search(context, question) }
+                .getOrElse {
+                    VoiceMvpLog.w("BAILIAN", "对话记忆检索失败，本次无记忆上下文: ${it.message}")
+                    emptyList()
+                }
+                .joinToString("\n") { "记忆中：${it.content}" }
+        } else ""
         val system = "你是云雀。回答要简短、口语化，适合直接读出来；不要用 Markdown、列表或代码块，尽量控制在两三句话。" +
             "当用户询问时间、日期或电量时，请调用对应工具获取真实信息后再回答。" +
+            (if (memoryText.isNotBlank()) "\n\n$memoryText\n" else "") +
             buildRoleContext(context, question)
         val forcedTool = detectTool(question)
         val answer = completeWithTools(deepSeekKey, system, question, context, "LLM", forcedTool)

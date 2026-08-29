@@ -46,9 +46,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `BailianMemory`：阿里云记忆库添加/检索。
 
 ### 记忆与数据
-- `MemoryDb`：speakers / conversations / memories / relationships / graph_positions / about_me / role_cards / world_books / world_entries。
-- `MemoryRetriever`：本地记忆检索。
-- `MemoryExtractor`、`RelationshipExtractor`、`AboutMeExtractor`：自动提炼。
+- **长期记忆纯云端**：每句旁听实时写入阿里云百炼记忆库（`BailianMemory.appendReliably`，verbatim + speaker/meta_data，噪声门过滤短句）；显式“记住”指令走 custom_content 原样存储；断网写入进 `filesDir/memory_outbox.jsonl`（上限 500 条），恢复后自动冲刷。
+- 检索：`SearchMemory` Lite 档 top_k=6，注入 `decide()`（旁听决策）与 `chat()`（对话）。
+- 记忆板块 UI 直连云端：ListMemory 分页列表 / 语义搜索 / DeleteMemory / 手动添加；首次打开自动把本地旧 memories 迁移上云并清空本地表。
+- 请求必带 `X-DashScope-WorkspaceId` 头与 `memory_library_id`（缺一即 ServiceNotOpened，2026-08-29 实测）。
+- `MemoryDb`：speakers / conversations / relationships / graph_positions / about_me / role_cards / world_books / world_entries（memories 表已退役，仅存迁移前残留）。
+- `RelationshipExtractor`、`AboutMeExtractor`：自动提炼（每 5 段触发，本地结构化数据）。
 - `RoleCardIO`：Tavern JSON/PNG 角色卡与世界书导入导出。
 - `TavernPngIO`：PNG tEXt 角色卡读写。
 
@@ -113,8 +116,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## CLI / MCP
 - 本地服务：127.0.0.1:8766（YunqueApiServer）
-- REST：/api/health、/api/memories、/api/conversations、/api/speakers、/api/relationships、/api/interruptions
-- MCP JSON-RPC：/mcp（list_memories、search_conversations、list_speakers、list_relationships、add_memory）
+- REST：/api/health、/api/memories、/api/memory（POST 添加）、/api/memory/search、/api/memory/delete、/api/conversations、/api/speakers、/api/relationships、/api/interruptions
+- MCP JSON-RPC：/mcp（list_memories、search_memory、add_memory、delete_memory、search_conversations、list_speakers、list_relationships）
+- 记忆端点均为云端代理；POST body 按 UTF-8 手工解码（绕开 NanoHTTPD 乱码问题）
 - 工具：`yunque-voice/tools/yunque-cli.py`
 
 ## 隐私
@@ -128,6 +132,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 本地/云端说话人可能重复，后续做合并策略
 - 自定义音色上传依赖阿里云临时 OSS；本地录制上传链路已通
 - 真机 Android 16/17 曾有 16KB 对齐警告，已切换 16KB 对齐 ffmpeg-kit 修复
+- 记忆逐句上传按 AddMemory 计次计费（默认规则 Pro ¥0.03/次，可在控制台把记忆片段规则改 Lite 降到 ¥0.018）；后续可加“60 秒合并上传”开关省 50-70%
+- 记忆片段规则默认 180 天过期（控制台可改），陪伴场景建议调长
+- 云端记忆商业化后需 workspace 头 + memory_library_id，缺一会报 ServiceNotOpened
 
 ## 关键文件路径
 - 主界面：`app/src/main/java/com/halo/yunquevoice/ui/MainShellComposeActivity.kt`

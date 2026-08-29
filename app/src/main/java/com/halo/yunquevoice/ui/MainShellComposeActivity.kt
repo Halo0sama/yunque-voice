@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -111,11 +112,11 @@ import io.github.nadeemiqbal.liquidglass.GlassNavBar
 import io.github.nadeemiqbal.liquidglass.liquidGlass
 import io.github.nadeemiqbal.liquidglass.rememberLiquidGlassState
 import com.halo.yunquevoice.memory.MemoryDb
-import com.halo.yunquevoice.memory.MemoryExtractor
 import com.halo.yunquevoice.memory.RelationshipRecord
 import com.halo.yunquevoice.memory.SpeakerProfile
 import com.halo.yunquevoice.service.AlwaysOnListeningService
 import com.halo.yunquevoice.voice.Store
+import com.halo.yunquevoice.voice.VoiceMvpLog
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import java.io.File
@@ -406,16 +407,86 @@ private fun HomeScreen(context: android.content.Context) {
 
 @Composable
 private fun MemoryScreen(context: android.content.Context) {
-    val db = MemoryDb(context)
     val scope = rememberCoroutineScope()
-    var memoryList by remember { mutableStateOf(db.listMemories()) }
-    var addText by remember { mutableStateOf("") }
-    var addDialog by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
+    val timeFmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()) }
+    var nodes by remember { mutableStateOf(listOf<com.halo.yunquevoice.voice.BailianMemory.MemoryNode>()) }
+    var total by remember { mutableStateOf(0) }
+    var page by remember { mutableStateOf(1) }
     var query by remember { mutableStateOf("") }
-    var deleteMemoryTarget by remember { mutableStateOf<com.halo.yunquevoice.memory.MemoryEntry?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("加载中…") }
+    var addDialog by remember { mutableStateOf(false) }
+    var addText by remember { mutableStateOf("") }
+    var deleteNodeTarget by remember { mutableStateOf<com.halo.yunquevoice.voice.BailianMemory.MemoryNode?>(null) }
+    var migrating by remember { mutableStateOf(false) }
+
+    fun loadPage(p: Int) {
+        scope.launch {
+            busy = true
+            runCatching { com.halo.yunquevoice.voice.BailianMemory.list(context, 20, p) }
+                .onSuccess { (list, t) ->
+                    nodes = if (p == 1) list else nodes + list
+                    total = t
+                    page = p
+                    status = if (t == 0) "云端还没有记忆" else ""
+                }
+                .onFailure { status = "云端记忆加载失败：${it.message?.take(80)}" }
+            busy = false
+        }
+    }
+
+    fun search() {
+        scope.launch {
+            busy = true
+            runCatching { com.halo.yunquevoice.voice.BailianMemory.search(context, query, topK = 20) }
+                .onSuccess {
+                    nodes = it
+                    total = it.size
+                    status = if (it.isEmpty()) "没有相关的云端记忆" else ""
+                }
+                .onFailure { status = "语义搜索失败：${it.message?.take(80)}" }
+            busy = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        // 一次性迁移：本地旧记忆上云，成功后清空本地表（云端为唯一真相源）
+        if (!Store.localMemoriesMigrated(context)) {
+            val db = MemoryDb(context)
+            val local = db.listMemories()
+            if (local.isNotEmpty()) {
+                migrating = true
+                runCatching {
+                    com.halo.yunquevoice.voice.BailianMemory.addFacts(context, local.map { it.content })
+                }.onSuccess {
+                    db.clearMemories()
+                    Store.setLocalMemoriesMigrated(context)
+                    VoiceMvpLog.i("MEMORY", "本地 ${local.size} 条记忆已迁移上云并清空")
+                }.onFailure {
+                    status = "本地记忆迁移失败：${it.message?.take(60)}，下次打开重试"
+                }
+                migrating = false
+            }
+        }
+        loadPage(1)
+    }
+
     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-        OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索记忆") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(24.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("语义搜索云端记忆") },
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(24.dp),
+            singleLine = true
+        )
+        Spacer(Modifier.size(8.dp))
+        IconButton(
+            onClick = { if (query.isBlank()) loadPage(1) else search() },
+            modifier = Modifier.size(56.dp).offset(y = 3.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp))
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = "搜索/刷新")
+        }
         Spacer(Modifier.size(8.dp))
         IconButton(
             onClick = { addText = ""; addDialog = true },
@@ -424,51 +495,76 @@ private fun MemoryScreen(context: android.content.Context) {
             Icon(Icons.Filled.Add, contentDescription = "添加记忆")
         }
     }
+    if (migrating) Text("正在把本地旧记忆迁移上云…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (status.isNotBlank()) {
+        Text(status, modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else if (nodes.isNotEmpty()) {
+        Text(
+            if (query.isBlank()) "共 $total 条（云端）" else "语义匹配 ${nodes.size} 条",
+            modifier = Modifier.padding(vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    nodes.forEach { m ->
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text(m.content)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        timeFmt.format(java.util.Date(if (m.eventTsMs > 0) m.eventTsMs else m.createdAtMs)) +
+                            if (m.score >= 0) "  ·  相关度 ${(m.score * 100).toInt()}%" else "",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(onClick = { deleteNodeTarget = m }) { Text("删除") }
+                }
+            }
+        }
+    }
+    if (nodes.isNotEmpty() && query.isBlank() && nodes.size < total) {
+        TextButton(onClick = { loadPage(page + 1) }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (busy) "加载中…" else "加载更多（已加载 ${nodes.size}/$total）")
+        }
+    }
+
     if (addDialog) {
         AlertDialog(
             onDismissRequest = { addDialog = false },
-            title = { Text("添加记忆") },
+            title = { Text("添加记忆（存入云端）") },
             text = { OutlinedTextField(value = addText, onValueChange = { addText = it }, modifier = Modifier.fillMaxWidth()) },
             confirmButton = {
                 TextButton(onClick = {
                     if (addText.isNotBlank()) {
-                        db.addMemory(addText.trim())
-                        memoryList = db.listMemories()
+                        scope.launch {
+                            runCatching { com.halo.yunquevoice.voice.BailianMemory.addCustom(context, addText.trim()) }
+                                .onSuccess { addDialog = false; loadPage(1) }
+                                .onFailure { status = "添加失败：${it.message?.take(80)}" }
+                        }
                     }
-                    addDialog = false
                 }) { Text("添加") }
             },
             dismissButton = { TextButton(onClick = { addDialog = false }) { Text("取消") } }
         )
     }
-    val shown = memoryList.filter { query.isBlank() || it.content.contains(query) }
-    if (shown.isEmpty()) {
-        Text("没有匹配的记忆", modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    } else {
-        shown.forEach { m ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(m.content)
-                    TextButton(onClick = { deleteMemoryTarget = m }) { Text("删除") }
-                }
-            }
-        }
-    }
 
-    deleteMemoryTarget?.let { m ->
+    deleteNodeTarget?.let { m ->
         ConfirmDeleteDialog(
-            text = "确定删除这条记忆吗？\n${m.content.take(50)}",
+            text = "删除这条云端记忆？\n${m.content.take(50)}\n（不可恢复）",
             onConfirm = {
-                db.deleteMemory(m.id)
-                memoryList = db.listMemories()
-                deleteMemoryTarget = null
+                scope.launch {
+                    runCatching { com.halo.yunquevoice.voice.BailianMemory.delete(context, m.id) }
+                        .onSuccess { deleteNodeTarget = null; loadPage(1) }
+                        .onFailure { status = "删除失败：${it.message?.take(80)}" }
+                }
             },
-            onDismiss = { deleteMemoryTarget = null }
+            onDismiss = { deleteNodeTarget = null }
         )
     }
 }
@@ -655,6 +751,7 @@ private fun SettingsScreen(context: android.content.Context) {
     var deepKey by remember { mutableStateOf(Store.deepSeekKey(context)) }
     var dashKey by remember { mutableStateOf(Store.dashScopeKey(context)) }
     var workspace by remember { mutableStateOf(Store.workspaceId(context)) }
+    var memoryLib by remember { mutableStateOf(Store.memoryLibraryId(context)) }
     var showAiCard by remember { mutableStateOf(false) }
     var operitUrl by remember { mutableStateOf(Store.operitUrl(context)) }
     var operitToken by remember { mutableStateOf(Store.operitToken(context)) }
@@ -713,8 +810,10 @@ private fun SettingsScreen(context: android.content.Context) {
                 OutlinedTextField(value = dashKey, onValueChange = { dashKey = it }, label = { Text("阿里云百炼 API Key") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.padding(top = 8.dp))
                 OutlinedTextField(value = workspace, onValueChange = { workspace = it }, label = { Text("业务空间 ID") }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.padding(top = 8.dp))
+                OutlinedTextField(value = memoryLib, onValueChange = { memoryLib = it }, label = { Text("记忆库 ID（控制台-记忆库 页面可查）") }, modifier = Modifier.fillMaxWidth())
                 Button(onClick = {
-                    Store.saveKeys(context, deepKey, dashKey, workspace)
+                    Store.saveKeys(context, deepKey, dashKey, workspace, memoryLib)
                     showAiCard = false
                 }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("保存") }
             }

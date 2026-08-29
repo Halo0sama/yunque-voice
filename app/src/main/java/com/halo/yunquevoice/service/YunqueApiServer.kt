@@ -2,8 +2,10 @@ package com.halo.yunquevoice.service
 
 import android.content.Context
 import com.halo.yunquevoice.memory.MemoryDb
+import com.halo.yunquevoice.voice.BailianMemory
 import com.halo.yunquevoice.voice.Store
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -53,10 +55,20 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
                 uri == "/api/health" && session.method == Method.GET ->
                     ok(JSONObject().put("ok", true).put("app", "yunque-voice").toString())
                 uri == "/api/memories" && session.method == Method.GET ->
-                    ok(db.listMemories().joinToString("\n") { it.content })
+                    ok(runBlocking { cloudMemoriesJson(50, 1) }.toString())
                 uri == "/api/memory" && session.method == Method.POST -> {
                     val body = JSONObject(bodyOf(session))
-                    db.addMemory(body.optString("content"))
+                    runBlocking { BailianMemory.addCustom(app, body.optString("content")) }
+                    ok("{\"ok\":true}")
+                }
+                uri == "/api/memory/search" && session.method == Method.POST -> {
+                    val body = JSONObject(bodyOf(session))
+                    val nodes = runBlocking { BailianMemory.search(app, body.optString("query")) }
+                    ok(nodesToJson(nodes).toString())
+                }
+                uri == "/api/memory/delete" && session.method == Method.POST -> {
+                    val body = JSONObject(bodyOf(session))
+                    runBlocking { BailianMemory.delete(app, body.optString("id")) }
                     ok("{\"ok\":true}")
                 }
                 uri == "/api/conversations" && session.method == Method.GET -> {
@@ -104,7 +116,25 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
         return if (method == "tools/call") {
             try {
                 val text = when (name) {
-                    "list_memories" -> db.listMemories().joinToString("\n") { it.content }
+                    "list_memories" -> runBlocking {
+                        BailianMemory.list(app, 50, 1).first.joinToString("\n") { it.content }
+                    }
+                    "search_memory" -> {
+                        val q = args.optString("query")
+                        val nodes = runBlocking { BailianMemory.search(app, q) }
+                        nodes.joinToString("\n") { "[${"%.2f".format(it.score)}] ${it.content}" }
+                            .ifBlank { "没有相关记忆" }
+                    }
+                    "add_memory" -> {
+                        val content = args.optString("content")
+                        if (content.isNotBlank()) runBlocking { BailianMemory.addCustom(app, content) }
+                        "ok"
+                    }
+                    "delete_memory" -> {
+                        val nodeId = args.optString("id")
+                        if (nodeId.isNotBlank()) runBlocking { BailianMemory.delete(app, nodeId) }
+                        "ok"
+                    }
                     "search_conversations" -> {
                         val q = args.optString("query")
                         db.searchConversations(q).joinToString("\n") { "[${it.speakerName ?: "未知"}] ${it.text}" }
@@ -132,6 +162,25 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
         }
     }
 
+    private fun nodesToJson(nodes: List<BailianMemory.MemoryNode>): JSONArray {
+        val arr = JSONArray()
+        for (n in nodes) {
+            arr.put(
+                JSONObject()
+                    .put("id", n.id)
+                    .put("content", n.content)
+                    .put("ts", if (n.eventTsMs > 0) n.eventTsMs else n.createdAtMs)
+                    .put("score", n.score)
+            )
+        }
+        return arr
+    }
+
+    private suspend fun cloudMemoriesJson(pageSize: Int, pageNum: Int): JSONArray {
+        val (nodes, _) = BailianMemory.list(app, pageSize, pageNum)
+        return nodesToJson(nodes)
+    }
+
     private fun dbToJson(list: List<com.halo.yunquevoice.memory.ConversationRecord>): JSONArray {
         val arr = JSONArray()
         for (c in list) {
@@ -149,9 +198,17 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
     }
 
     private fun bodyOf(session: IHTTPSession): String {
-        val files = HashMap<String, String>()
-        session.parseBody(files)
-        return files["postData"] ?: ""
+        // 不用 parseBody：它按非 UTF-8 解码会把中文变 '?'，直接读原始字节按 UTF-8 解
+        val len = session.headers["content-length"]?.toIntOrNull() ?: 0
+        if (len <= 0) return ""
+        val buf = ByteArray(len)
+        var read = 0
+        while (read < len) {
+            val r = session.inputStream.read(buf, read, len - read)
+            if (r < 0) break
+            read += r
+        }
+        return String(buf, 0, read, Charsets.UTF_8)
     }
 
     private fun ok(body: String): Response =

@@ -481,6 +481,11 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         writableDatabase.delete("memories", "id=?", arrayOf(id.toString()))
     }
 
+    /** 云端迁移成功后清空本地 memories 表（云端为唯一真相源）。 */
+    fun clearMemories() {
+        writableDatabase.delete("memories", null, null)
+    }
+
     /* ─────────── about_me ─────────── */
 
     fun addAboutMe(content: String, source: String = "manual", speakerId: String? = null): Long {
