@@ -2,6 +2,7 @@ package com.halo.yunquevoice.memory
 
 import android.content.Context
 import com.halo.yunquevoice.voice.BailianMemory
+import com.halo.yunquevoice.voice.Store
 import com.halo.yunquevoice.voice.VoiceMvpClient
 import com.halo.yunquevoice.voice.VoiceMvpLog
 import org.json.JSONArray
@@ -105,7 +106,7 @@ object WorkingMemory {
             "\"facts\":[\"值得长期记住的独立事实，每条一句话，没有就给空数组\"]}。只输出 JSON。"
         val user = "【旧摘要】\n$oldSummary\n\n【新对话原话】\n$transcript"
         val content = runCatching {
-            VoiceMvpClient.completeRaw(deepSeekKey, system, user, "COMPACTION")
+            VoiceMvpClient.completeRaw(deepSeekKey, system, user, "COMPACTION", Store.llmProvider(context))
         }.getOrElse {
             VoiceMvpLog.w("WORKMEM", "压缩调用失败($reason): ${it.message}")
             stat(db, "compaction_fail")

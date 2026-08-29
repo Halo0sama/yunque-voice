@@ -106,6 +106,7 @@ class AlwaysOnListeningService : Service() {
     private val cloudSpeakerMap = HashMap<Int, String>()
 
     @Volatile private var compacting = false
+    @Volatile private var noiseFloor = 500.0
     @Volatile private var diarizationRunning = false
     @Volatile private var inSpeech = false
     @Volatile private var silenceMs = 0L
@@ -423,7 +424,10 @@ class AlwaysOnListeningService : Service() {
             while (recentChunks.size > 30) recentChunks.removeFirst()
 
             val rms = rms(chunk)
-            val isVoice = rms > 500
+            // 自适应噪声地板：无语音时缓慢跟踪环境底噪，阈值随环境抬高，
+            // 避免"持续底噪略过固定阈值→段永远不结束→缓冲无限增长"
+            if (!inSpeech) noiseFloor = noiseFloor * 0.999 + rms * 0.001
+            val isVoice = rms > max(500.0, noiseFloor * 4)
 
             if (isVoice) {
                 if (!inSpeech) {
@@ -545,8 +549,6 @@ class AlwaysOnListeningService : Service() {
         }
         handleTranscriptText(text)
     }
-
-    private fun isMemoryCommand(text: String): Boolean = MemoryUploader.isMemoryCommand(text)
 
     /* ───────────── 工作记忆压缩 ───────────── */
 

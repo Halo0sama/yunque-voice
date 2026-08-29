@@ -28,6 +28,21 @@ object Store {
     private const val KEY_NOTIFICATION_INTERRUPT = "notification_interrupt"
     private const val KEY_LISTEN_ONLY = "listen_only"
     private const val KEY_LISTEN_ONLY_TEXT_REPLY = "listen_only_text_reply"
+    private const val KEY_LLM_PROVIDER = "llm_provider"
+
+    const val LLM_DEEPSEEK = "deepseek"
+    const val LLM_ZHIPU = "zhipu"
+
+    /** 对话/决策/提炼所用大模型的供应商。Key 复用 deepseek_key 存储（语义为"对话模型 Key"）。 */
+    fun llmProvider(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LLM_PROVIDER, LLM_DEEPSEEK)
+            ?: LLM_DEEPSEEK
+
+    fun saveLlmProvider(context: Context, provider: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_LLM_PROVIDER, provider)
+        }
+    }
 
     // 1 = 只在该说时说；2 = 更主动旁听建议；3 = 只响应“云雀”唤醒
     const val LISTEN_MODE_SAFE = 1

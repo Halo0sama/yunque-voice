@@ -17,15 +17,24 @@ import java.util.concurrent.TimeUnit
 object VoiceMvpClient {
 
     private const val ASR_MODEL = "qwen3-asr-flash"
-    private const val LLM_MODEL = "deepseek-v4-flash"
     private const val TTS_MODEL = "qwen-audio-3.0-tts-flash"
     private const val TTS_VOICE = "longanxiaoxin"
 
     private const val ASR_URL =
         "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-    private const val LLM_URL = "https://api.deepseek.com/chat/completions"
     private const val TTS_URL =
         "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer"
+
+    /** 对话模型供应商路由：均为 OpenAI 兼容协议（含工具调用）。 */
+    private fun llmEndpoint(provider: String): String = when (provider) {
+        Store.LLM_ZHIPU -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        else -> "https://api.deepseek.com/chat/completions"
+    }
+
+    private fun llmModel(provider: String): String = when (provider) {
+        Store.LLM_ZHIPU -> "glm-5.3-flash"
+        else -> "deepseek-v4-flash"
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -224,14 +233,15 @@ object VoiceMvpClient {
                 for (i in 0 until ext.length()) toolDefs.put(ext.getJSONObject(i))
             }
         }
+        val provider = if (context != null) Store.llmProvider(context) else Store.LLM_DEEPSEEK
         for (turn in 0 until 4) {
             val body = JSONObject()
-                .put("model", LLM_MODEL)
+                .put("model", llmModel(provider))
                 .put("stream", false)
                 .put("temperature", if (label == "DECIDE") 0.2 else 0.3)
                 .put("messages", messages)
                 .put("tools", toolDefs)
-            val resp = JSONObject(postJson(LLM_URL, deepSeekKey, body, label))
+            val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val message = resp.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val toolCalls = message.optJSONArray("tool_calls")
             if (toolCalls != null && toolCalls.length() > 0) {
@@ -324,18 +334,18 @@ object VoiceMvpClient {
     }
 
     /** 不带工具的原始补全：供压缩/提炼等结构化任务使用。 */
-    suspend fun completeRaw(deepSeekKey: String, system: String, user: String, label: String): String =
+    suspend fun completeRaw(deepSeekKey: String, system: String, user: String, label: String, provider: String = Store.LLM_DEEPSEEK): String =
         withContext(Dispatchers.IO) {
             val messages = JSONArray()
                 .put(JSONObject().put("role", "system").put("content", system))
                 .put(JSONObject().put("role", "user").put("content", user))
             val body = JSONObject()
-                .put("model", LLM_MODEL)
+                .put("model", llmModel(provider))
                 .put("stream", false)
                 .put("temperature", 0.2)
                 .put("max_tokens", 2000)
                 .put("messages", messages)
-            val resp = JSONObject(postJson(LLM_URL, deepSeekKey, body, label))
+            val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val content = resp.getJSONArray("choices")
                 .getJSONObject(0)
                 .getJSONObject("message")
@@ -368,7 +378,8 @@ object VoiceMvpClient {
             (if (memoryText.isNotBlank()) "\n\n$memoryText\n" else "") +
             buildRoleContext(context, question)
         val turns = JSONArray()
-        for ((role, content) in recentTurns.takeLast(30)) {
+        // 近 12 轮作为对话格式的短期上下文；更早的靠 workingSummary 与记忆检索覆盖
+        for ((role, content) in recentTurns.takeLast(12)) {
             turns.put(JSONObject().put("role", role).put("content", content))
         }
         val forcedTool = detectTool(question)

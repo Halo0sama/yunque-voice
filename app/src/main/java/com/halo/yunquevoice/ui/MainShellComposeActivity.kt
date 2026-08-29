@@ -66,6 +66,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenu
@@ -933,6 +935,7 @@ private fun SettingsScreen(context: android.content.Context) {
     var workspace by remember { mutableStateOf(Store.workspaceId(context)) }
     var memoryLib by remember { mutableStateOf(Store.memoryLibraryId(context)) }
     var showAiCard by remember { mutableStateOf(false) }
+    var llmProvider by remember { mutableStateOf(Store.llmProvider(context)) }
     var operitUrl by remember { mutableStateOf(Store.operitUrl(context)) }
     var operitToken by remember { mutableStateOf(Store.operitToken(context)) }
     var showOperit by remember { mutableStateOf(false) }
@@ -1012,7 +1015,20 @@ private fun SettingsScreen(context: android.content.Context) {
         YunqueBottomSheet(onDismiss = { showAiCard = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text("AI 与接口", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-                OutlinedTextField(value = deepKey, onValueChange = { deepKey = it }, label = { Text("DeepSeek API Key") }, modifier = Modifier.fillMaxWidth())
+                Text("对话模型", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = llmProvider == Store.LLM_DEEPSEEK,
+                        onClick = { llmProvider = Store.LLM_DEEPSEEK; Store.saveLlmProvider(context, Store.LLM_DEEPSEEK) },
+                        label = { Text("DeepSeek") }
+                    )
+                    FilterChip(
+                        selected = llmProvider == Store.LLM_ZHIPU,
+                        onClick = { llmProvider = Store.LLM_ZHIPU; Store.saveLlmProvider(context, Store.LLM_ZHIPU) },
+                        label = { Text("智谱 GLM") }
+                    )
+                }
+                OutlinedTextField(value = deepKey, onValueChange = { deepKey = it }, label = { Text("对话模型 API Key（随上方供应商）") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.padding(top = 8.dp))
                 OutlinedTextField(value = dashKey, onValueChange = { dashKey = it }, label = { Text("阿里云百炼 API Key") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.padding(top = 8.dp))

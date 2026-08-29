@@ -15,10 +15,11 @@
 - Kotlin 2.3.21 + Jetpack Compose BOM 2025.09
 - Android Gradle Plugin 8.7.3 + Gradle 8.9
 - minSdk 26 / targetSdk 36
-- SQLite（`yunque_memory.db`，版本 7）
+- SQLite（`yunque_memory.db`，版本 9）
 - OkHttp、Coroutines、NanoHTTPD
 - ffmpeg-kit（`dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7`）
 - LiquidGlass（`io.github.nadeemiqbal:liquid-glass:0.2.3`）
+- 对话模型可切换（v0.8.0）：DeepSeek deepseek-v4-flash / 智谱 glm-5.3-flash（`Store.llmProvider`，OpenAI 兼容含工具调用；智谱为推理模型带 reasoning_content）
 
 ## 构建与安装
 ```bash
@@ -45,13 +46,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `SoundCue`：开启/关闭提示音（上行/下行音阶）。
 - `BailianMemory`：阿里云记忆库添加/检索。
 
-### 记忆与数据（v0.6.0 起三层结构）
-- **长期记忆（云端）**：会话簇合并上传——服务内攒批（≥24 句 / 静默 2 分钟 / 停服务三条件冲刷），`BailianMemory.appendBatchReliably` 一次调用带整簇（计费按次，单次实测上限 50~63 条）；显式”记住”走 verbatim 立即上传；断网整批入 `filesDir/memory_outbox.jsonl`（上限 500 行），恢复自动冲刷。
-- **工作记忆（本地）**：`WorkingMemory`——决策上下文 = session_state.summary（滚动摘要）+ 近 48h 原话窗口（≤80 句/24K 字），全部从 conversations 表重建，重启零失忆；prompt 分层排布吃前缀缓存。
-- **压缩（桥梁）**：惰性每日压缩（跨天第一句/服务启动时触发）+ 保险丝（窗口估算 token > 24K 提前压缩）：把旧原话折进摘要（DeepSeek completeRaw，≤600 字），新事实自动 AddMemory 上云。`ACTION_TEST_COMPACTION --el cutoff_hours N` 可手动触发。
+### 记忆与数据（v0.8.0 起三层结构）
+- **长期记忆（云端）**：会话簇合并上传——`MemoryUploader` 统一入口（服务旁听/打字输入/测试钩子共用），攒批（≥24 句 / 静默 2 分钟 / 停服务三条件冲刷），`BailianMemory.appendBatchReliably` 一次调用带整簇；断网整批入 `filesDir/memory_outbox.jsonl`（上限 500 行），恢复自动冲刷。
+- **无本地”记住”关键词硬规则**（v0.8.0）：是否值得记住由云端记忆库 AI 提炼决断；控制台记忆片段规则指令可加”用户明确要求记住的内容必须原样保留”增强。
+- **工作记忆（本地）**：`WorkingMemory`——决策上下文 = session_state.summary（滚动摘要）+ 近 48h 原话窗口（≤80 句/24K 字），全部从 conversations 表重建，重启零失忆；prompt 分层排布吃前缀缓存；chat() 带最近 12 轮对话格式上下文。
+- **压缩（桥梁）**：惰性每日压缩 + 保险丝（>24K token）：旧原话折进摘要，新事实自动 AddMemory 上云。
 - 检索：`SearchMemory` Lite 档 top_k=6，注入 `decide()` 与 `chat()`。
-- 记忆板块 UI 直连云端：ListMemory 分页 / 语义搜索 / DeleteMemory / 手动添加；首次打开自动迁移本地旧 memories。
-- 请求必带 `X-DashScope-WorkspaceId` 头与 `memory_library_id`（缺一即 ServiceNotOpened）。
+- VAD 自适应噪声地板（v0.8.0）：阈值 = max(500, 底噪EMA×4)，防持续底噪致段缓冲无限增长；另有 30 秒硬顶强制切段。
 - **试用周观测**：`daily_stats` 表按日累计 segments_captured/noise_filtered/upload_calls/upload_sentences/retrieval_calls/hits/miss/decide_calls/speak/silent/fail/decide_ms/compaction_* 等指标；`GET /api/stats`（adb forward 8766）汇总最近 14 天 + 工作记忆状态 + outbox 欠账；`GET /api/log?n=300` 拉日志尾；MCP 工具 `get_stats`。VoiceMvpLog 落盘 cache/voice_mvp.log（4MB 轮转）。
 - `MemoryDb` v9：+ session_state、daily_stats；`RelationshipExtractor`、`AboutMeExtractor` 保留（每 5 段触发）。
 
