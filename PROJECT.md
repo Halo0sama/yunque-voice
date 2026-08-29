@@ -38,13 +38,21 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `MvpRecognitionService`：Android 语音识别服务。
 
 ### 语音处理
-- `VoiceMvpClient`：ASR、DeepSeek、TTS、工具调用循环、角色上下文、Operit 工具合并。
+- `VoiceMvpClient`：ASR、对话模型（DeepSeek/智谱可切）、TTS、工具调用循环、角色上下文、Operit 工具合并。
 - `SpeakerEngine`：本地声纹特征聚类。
 - `DashScopeFiletrans`：阿里云文件转写 + DIAR。
 - `DashScopeUpload`：阿里云临时文件上传。
 - `AudioTrimmer`：智能选取 15 秒人声片段。
 - `SoundCue`：开启/关闭提示音（上行/下行音阶）。
 - `BailianMemory`：阿里云记忆库添加/检索。
+
+### 说话人分离（v0.9.0 重写：批内云端，跨批本地）
+- **批内分人（云端权威）**：每 4 段触发 `runCloudDiarization`，DashScope 文件转写 DIAR 对同一份音频聚类——"这几句是否同一嗓音"以云端为准
+- **跨批认人（本地声纹）**：簇的归属锚定在簇内多数派的**本地声纹档案**（`applyDiarization`），绝不使用批次编号（旧逻辑用每批内部编号当全局身份，跨批必撞：下午的同事被并进上午的"云端说话人0"）
+- 同簇内少数派本地档案经 `SpeakerEngine.mergeProfiles` 融合（特征按样本量加权混合 + 记录/关系并档）
+- "云端说话人N"档案不再产生（存量保留）；新声音编号 = 现存"未知N"最大编号+1（删除/改名不撞号）
+- 已知取舍：本地声纹（六维特征）跨批偶发认错/漏认 → 表现为多余"未知N"或错归属，可在"身边的人"手动合并/改名纠正；记忆上云携带的名字为 DIAR 前的本地名（本地名即终名，除非事后手动改名）
+- 测试钩子：`ACTION_TEST_DIAR --es texts 'A|B|C|D' --es clusters '0,1,0,1'`（纯文本验证批内合并逻辑）
 
 ### 记忆与数据（v0.8.0 起三层结构）
 - **长期记忆（云端）**：会话簇合并上传——`MemoryUploader` 统一入口（服务旁听/打字输入/测试钩子共用），攒批（≥24 句 / 静默 2 分钟 / 停服务三条件冲刷），`BailianMemory.appendBatchReliably` 一次调用带整簇；断网整批入 `filesDir/memory_outbox.jsonl`（上限 500 行），恢复自动冲刷。

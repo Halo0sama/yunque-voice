@@ -30,6 +30,7 @@ import com.halo.yunquevoice.ui.MainShellComposeActivity
 import com.halo.yunquevoice.voice.BailianMemory
 import com.halo.yunquevoice.voice.MemoryUploader
 import com.halo.yunquevoice.voice.DashScopeFiletrans
+import com.halo.yunquevoice.voice.DiarizedSentence
 import com.halo.yunquevoice.voice.DashScopeUpload
 import com.halo.yunquevoice.voice.InterruptionRecord
 import com.halo.yunquevoice.voice.LocalInfo
@@ -68,6 +69,7 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_FILETRANS = "com.halo.yunquevoice.action.TEST_FILETRANS"
         const val ACTION_TEST_RELATIONS = "com.halo.yunquevoice.action.TEST_RELATIONS"
         const val ACTION_TEST_COMPACTION = "com.halo.yunquevoice.action.TEST_COMPACTION"
+        const val ACTION_TEST_DIAR = "com.halo.yunquevoice.action.TEST_DIAR"
 
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
@@ -103,7 +105,6 @@ class AlwaysOnListeningService : Service() {
     private val segmentBuffer = ByteArrayOutputStream()
     private val preRoll = ArrayDeque<ByteArray>()
     private val pendingSegments = mutableListOf<PendingSegment>()
-    private val cloudSpeakerMap = HashMap<Int, String>()
 
     @Volatile private var compacting = false
     @Volatile private var noiseFloor = 500.0
@@ -174,6 +175,27 @@ class AlwaysOnListeningService : Service() {
                 // 测试钩子：与真实片段同一条上云链路（噪声门/verbatim/簇合并）
                 MemoryUploader.enqueue(this, memoryDb, text, "主人")
                 scope.launch { handleTranscriptText(text) }
+            }
+            ACTION_TEST_DIAR -> {
+                // 测试钩子：texts 用 | 分隔，clusters 用 , 分隔（与 texts 一一对应的批次内簇号）
+                val texts = intent?.getStringExtra("texts")?.split("|")?.map { it.trim() }?.filter { it.isNotEmpty() }
+                val clusters = intent?.getStringExtra("clusters")?.split(",")?.map { it.trim().toIntOrNull() ?: 0 }
+                if (texts != null && clusters != null && texts.size == clusters.size && texts.size >= 2) {
+                    scope.launch {
+                        val batch = texts.map { t ->
+                            val sp = SpeakerEngine.recognize(memoryDb, ByteArray(32000))
+                            val convId = memoryDb.addConversation(
+                                ConversationRecord(0, System.currentTimeMillis(), sp.id, sp.name, t, "other")
+                            )
+                            PendingSegment(ByteArray(32000), t, convId, sp.id)
+                        }
+                        val sentences = clusters.mapIndexed { i, c ->
+                            DiarizedSentence(i * 1000L, i * 1000L + 900, batch[i].text, c)
+                        }
+                        applyDiarization(batch, sentences)
+                        VoiceMvpLog.i("DIAR", "测试分离完成：${texts.size} 句 / ${clusters.toSet().size} 簇")
+                    }
+                }
             }
             ACTION_TEST_UPLOAD -> {
                 val key = Store.dashScopeKey(this)
@@ -582,6 +604,40 @@ class AlwaysOnListeningService : Service() {
 
     /* ───────────── 云端说话人分离回写 ───────────── */
 
+    /**
+     * 云端分离回写（v0.9.0 重写）：
+     * - 批内分人：云端 DIAR 对同一份音频聚类，是"这几句是否同一嗓音"的权威
+     * - 跨批认人：身份锚定在簇内多数派的**本地声纹档案**上，绝不使用批次编号
+     *   （旧逻辑用每批内部的编号当全局身份，跨批次必然撞号误合并）
+     * 同簇内的少数派本地档案融合进多数派（特征加权混合），对话记录改写到锚点档案。
+     */
+    private suspend fun applyDiarization(batch: List<PendingSegment>, sentences: List<DiarizedSentence>) {
+        val groups = sentences.groupBy { it.speakerId }
+        for ((cloudId, sents) in groups) {
+            val matched = sents.mapNotNull { s -> matchSegment(s.text, batch) }
+            if (matched.isEmpty()) continue
+            val byLocal = matched.groupingBy { it.speakerId }.eachCount()
+            val target = byLocal.entries
+                .mapNotNull { memoryDb.getSpeaker(it.key) }
+                .filter { it.canonical }
+                .maxByOrNull { byLocal[it.id] ?: 0 } ?: continue
+            var merges = 0
+            for (localId in byLocal.keys) {
+                if (localId == target.id) continue
+                memoryDb.getSpeaker(localId)?.let {
+                    SpeakerEngine.mergeProfiles(memoryDb, it.id, target.id)
+                    merges++
+                }
+            }
+            for (m in matched) {
+                memoryDb.updateConversationSpeaker(m.convId, target.id, target.name)
+            }
+            WorkingMemory.stat(memoryDb, "diar_clusters")
+            WorkingMemory.stat(memoryDb, "diar_merges", merges.toDouble())
+            VoiceMvpLog.i("DIAR", "簇$cloudId → ${target.name}（${matched.size} 句，合并 $merges 个本地档案）")
+        }
+    }
+
     private suspend fun runCloudDiarization() {
         if (diarizationRunning) return
         diarizationRunning = true
@@ -596,27 +652,7 @@ class AlwaysOnListeningService : Service() {
             val oss = DashScopeUpload.upload(dashKey, wav, "qwen-audio-3.0-asr-flash-filetrans")
             val sentences = DashScopeFiletrans.transcribe(dashKey, oss, Store.workspaceId(this@AlwaysOnListeningService), true)
             VoiceMvpLog.i("DIAR", "云端分离句子 ${sentences.size} 条")
-            for (s in sentences) {
-                val seg = matchSegment(s.text, batch) ?: continue
-                val cloudId = s.speakerId.toString()
-                val speakerName = cloudSpeakerMap.getOrPut(s.speakerId) { "云端说话人${s.speakerId}" }
-                val sp = ensureCloudSpeaker(speakerName, cloudId)
-                // 云端为主：把本地 speaker 合并进云端主档案
-                val local = memoryDb.getSpeaker(seg.speakerId)
-                if (local != null && local.id != sp.id && local.canonical) {
-                    memoryDb.mergeSpeaker(local.id, sp.id)
-                    runCatching {
-                        val from = File(cacheDir, "speaker_samples/${local.id}.wav")
-                        val to = File(cacheDir, "speaker_samples/${sp.id}.wav")
-                        if (from.exists()) {
-                            from.copyTo(to, overwrite = true)
-                            from.delete()
-                        }
-                    }
-                }
-                memoryDb.updateConversationSpeaker(seg.convId, sp.id, sp.name)
-                VoiceMvpLog.i("DIAR", "回写: ${seg.text.take(30)} -> ${sp.name} cloud=$cloudId")
-            }
+            applyDiarization(batch, sentences)
         } catch (e: Throwable) {
             VoiceMvpLog.e("DIAR", "云端分离回写失败: ${e.message}", e)
         } finally {
@@ -652,23 +688,6 @@ class AlwaysOnListeningService : Service() {
             val b = seg.text.filter { !it.isWhitespace() }
             a.any { it in b } || b.any { it in a }
         }
-    }
-
-    private fun ensureCloudSpeaker(name: String, cloudId: String? = null): SpeakerProfile {
-        memoryDb.getSpeakers().firstOrNull { it.cloudSpeakerId == cloudId }?.let { return it }
-        memoryDb.getSpeakers().firstOrNull { it.name == name && it.canonical }?.let { return it }
-        val sp = SpeakerProfile(
-            id = java.util.UUID.randomUUID().toString(),
-            name = name,
-            feature = "[]",
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis(),
-            sampleCount = 1,
-            cloudSpeakerId = cloudId,
-            canonical = true
-        )
-        memoryDb.upsertSpeaker(sp)
-        return sp
     }
 
     /** 拿到一段旁听文字后：进上下文、决策、必要时 TTS 并播放。 */

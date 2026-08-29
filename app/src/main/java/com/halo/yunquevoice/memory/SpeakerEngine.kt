@@ -57,6 +57,29 @@ object SpeakerEngine {
         return created
     }
 
+    /** 融合两条声纹档案（云端批内分离判定同源时调用）：特征按样本量加权混合，记录/关系一并并档。 */
+    fun mergeProfiles(db: MemoryDb, fromId: String, intoId: String) {
+        if (fromId == intoId) return
+        val into = db.getSpeaker(intoId) ?: return
+        val from = db.getSpeaker(fromId) ?: return
+        val a = decodeFeature(into.feature)
+        val b = decodeFeature(from.feature)
+        val total = into.sampleCount + from.sampleCount
+        if (a.size == b.size && a.isNotEmpty() && (a.any { it != 0.0 } || b.any { it != 0.0 })) {
+            val merged = if (into.sampleCount >= from.sampleCount) blend(a, b) else blend(b, a)
+            db.upsertSpeaker(
+                into.copy(
+                    feature = encodeFeature(merged),
+                    sampleCount = total,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        } else if (total != into.sampleCount) {
+            db.upsertSpeaker(into.copy(sampleCount = total, updatedAt = System.currentTimeMillis()))
+        }
+        db.mergeSpeaker(fromId, intoId)
+    }
+
     private fun extractFeature(pcm: ByteArray): DoubleArray {
         val frameBytes = 1600 // 50ms @16k = 800 samples * 2 bytes
         val frameSamples = frameBytes / 2
