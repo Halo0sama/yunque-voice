@@ -241,6 +241,10 @@ object VoiceMvpClient {
                 .put("temperature", if (label == "DECIDE") 0.2 else 0.3)
                 .put("messages", messages)
                 .put("tools", toolDefs)
+            // 实时对话路径用最浅思考档：glm-5.3 是常思考模型，low 档显著降低延迟与 token
+            if (provider == Store.LLM_ZHIPU) {
+                body.put("thinking", JSONObject().put("type", "enabled").put("depth", "low"))
+            }
             val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val message = resp.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val toolCalls = message.optJSONArray("tool_calls")

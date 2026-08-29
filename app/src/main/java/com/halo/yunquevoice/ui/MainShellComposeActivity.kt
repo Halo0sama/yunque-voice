@@ -948,6 +948,8 @@ private fun SettingsScreen(context: android.content.Context) {
     var interruptNotif by remember { mutableStateOf(Store.notificationInterruptEnabled(context)) }
     var showListenSheet by remember { mutableStateOf(false) }
     var textReply by remember { mutableStateOf(Store.listenOnlyTextReply(context)) }
+    var showAudioSheet by remember { mutableStateOf(false) }
+    var audioInput by remember { mutableStateOf(Store.audioInput(context)) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     QuickNav("AI 与接口") { showAiCard = true }
@@ -956,6 +958,39 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("自定义音色") { showVoiceSheet = true }
     QuickNav("通知栏控制") { showNotifSheet = true }
     QuickNav("仅聆听与对话") { showListenSheet = true }
+    QuickNav("麦克风与音质") { showAudioSheet = true }
+    if (showAudioSheet) {
+        YunqueBottomSheet(onDismiss = { showAudioSheet = false }) {
+            Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+                Text("麦克风与音质", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "手机麦克风：收全环境的声音，蓝牙耳机只负责出声，音乐视频音质不受影响（推荐日常使用）。\n" +
+                        "耳机麦克风：声音从耳机麦收，适合戴着耳机自言自语；受蓝牙协议限制，开启期间耳机里媒体音质会下降。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(
+                    onClick = {
+                        audioInput = Store.AUDIO_PHONE
+                        Store.saveAudioInput(context, Store.AUDIO_PHONE)
+                        context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
+                            action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
+                        })
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (audioInput == Store.AUDIO_PHONE) "✓ 手机麦克风（推荐）" else "手机麦克风（推荐）") }
+                TextButton(
+                    onClick = {
+                        audioInput = Store.AUDIO_EARPHONE
+                        Store.saveAudioInput(context, Store.AUDIO_EARPHONE)
+                        context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
+                            action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
+                        })
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text(if (audioInput == Store.AUDIO_EARPHONE) "✓ 耳机麦克风（媒体音质会下降）" else "耳机麦克风（媒体音质会下降）") }
+            }
+        }
+    }
     if (showListenSheet) {
         YunqueBottomSheet(onDismiss = { showListenSheet = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {

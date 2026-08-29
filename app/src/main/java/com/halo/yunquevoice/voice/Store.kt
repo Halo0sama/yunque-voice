@@ -29,6 +29,21 @@ object Store {
     private const val KEY_LISTEN_ONLY = "listen_only"
     private const val KEY_LISTEN_ONLY_TEXT_REPLY = "listen_only_text_reply"
     private const val KEY_LLM_PROVIDER = "llm_provider"
+    private const val KEY_AUDIO_INPUT = "audio_input"
+
+    const val AUDIO_PHONE = "phone"
+    const val AUDIO_EARPHONE = "earphone"
+
+    /** 麦克风来源：手机麦克风（默认，蓝牙媒体音质不受影响）或耳机麦克风（走 SCO 通话通道）。 */
+    fun audioInput(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_AUDIO_INPUT, AUDIO_PHONE)
+            ?: AUDIO_PHONE
+
+    fun saveAudioInput(context: Context, input: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_AUDIO_INPUT, input)
+        }
+    }
 
     const val LLM_DEEPSEEK = "deepseek"
     const val LLM_ZHIPU = "zhipu"

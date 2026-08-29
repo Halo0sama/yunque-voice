@@ -70,6 +70,7 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_RELATIONS = "com.halo.yunquevoice.action.TEST_RELATIONS"
         const val ACTION_TEST_COMPACTION = "com.halo.yunquevoice.action.TEST_COMPACTION"
         const val ACTION_TEST_DIAR = "com.halo.yunquevoice.action.TEST_DIAR"
+        const val ACTION_APPLY_AUDIO = "com.halo.yunquevoice.action.APPLY_AUDIO"
 
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
@@ -151,6 +152,13 @@ class AlwaysOnListeningService : Service() {
                 stopEverything()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+            ACTION_APPLY_AUDIO -> {
+                // 音频输入切换即生效：采集中的话重启采集线程
+                if (capturing) {
+                    stopCapture()
+                    startCapture()
+                }
             }
             ACTION_INTERRUPT -> {
                 interruptPlayback()
@@ -361,10 +369,18 @@ class AlwaysOnListeningService : Service() {
             VoiceMvpLog.e("SERVICE", "AudioRecord getMinBufferSize=$minBuf")
             return
         }
-        selectBluetoothInput()
+        // 音频输入源：手机麦克风（默认，蓝牙媒体走 A2DP 不降质）或耳机麦克风（SCO 通话通道）
+        val useEarphone = Store.audioInput(this) == Store.AUDIO_EARPHONE
+        val source = if (useEarphone) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        else MediaRecorder.AudioSource.VOICE_RECOGNITION
+        if (useEarphone) {
+            selectBluetoothInput()
+        } else {
+            clearBluetoothInput()
+        }
         val bufferSize = max(minBuf, SAMPLE_RATE * 2 * 2)
         val record = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            source,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -378,7 +394,7 @@ class AlwaysOnListeningService : Service() {
         audioRecord = record
         capturing = true
         record.startRecording()
-        VoiceMvpLog.i("SERVICE", "持续采集已启动 buffer=$bufferSize")
+        VoiceMvpLog.i("SERVICE", "持续采集已启动 buffer=$bufferSize 输入=${if (useEarphone) "耳机麦克风(SCO)" else "手机麦克风"}")
         captureThread = Thread {
             val buf = ByteArray(bufferSize)
             while (capturing) {
@@ -410,6 +426,22 @@ class AlwaysOnListeningService : Service() {
             }
         }.onFailure {
             VoiceMvpLog.w("SERVICE", "selectBluetoothInput failed: ${it.message}")
+        }
+    }
+
+    /** 手机麦克风模式：确保没有残留的通话路由，蓝牙媒体保持 A2DP 高音质。 */
+    private fun clearBluetoothInput() {
+        runCatching {
+            val am = getSystemService(AudioManager::class.java)
+            if (Build.VERSION.SDK_INT >= 31) {
+                am.clearCommunicationDevice()
+            } else {
+                am.stopBluetoothSco()
+                am.isBluetoothScoOn = false
+            }
+            VoiceMvpLog.i("SERVICE", "已切回手机麦克风输入（蓝牙媒体保持高音质）")
+        }.onFailure {
+            VoiceMvpLog.w("SERVICE", "clearBluetoothInput failed: ${it.message}")
         }
     }
 
