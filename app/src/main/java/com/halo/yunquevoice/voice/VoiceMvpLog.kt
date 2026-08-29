@@ -35,6 +35,15 @@ object VoiceMvpLog {
 
     fun dump(): String = file?.takeIf { it.exists() }?.readText() ?: "(no log file)"
 
+    /** 末尾 n 行，供远程排障拉取。 */
+    fun tail(n: Int = 300): String {
+        val f = file?.takeIf { it.exists() } ?: return "(no log file)"
+        return runCatching {
+            val lines = f.readLines()
+            if (lines.size <= n) lines.joinToString("\n") else lines.takeLast(n).joinToString("\n")
+        }.getOrElse { "(read failed: ${it.message})" }
+    }
+
     private fun write(level: String, tag: String, msg: String, tr: Throwable?) {
         val time = fmt.format(Date())
         val line = "$time $level/$tag $msg"
@@ -45,6 +54,12 @@ object VoiceMvpLog {
         }
         try {
             val f = file ?: return
+            // 轮转：超过 4MB 归档为 .old（只留一代），保证长期运行日志有界
+            if (f.length() > 4L * 1024 * 1024) {
+                val old = File(f.parentFile, "$FILE_NAME.old")
+                old.delete()
+                f.renameTo(old)
+            }
             f.parentFile?.mkdirs()
             FileWriter(f, true).use { w ->
                 w.write(line)

@@ -321,6 +321,28 @@ object VoiceMvpClient {
         return sb.toString()
     }
 
+    /** 不带工具的原始补全：供压缩/提炼等结构化任务使用。 */
+    suspend fun completeRaw(deepSeekKey: String, system: String, user: String, label: String): String =
+        withContext(Dispatchers.IO) {
+            val messages = JSONArray()
+                .put(JSONObject().put("role", "system").put("content", system))
+                .put(JSONObject().put("role", "user").put("content", user))
+            val body = JSONObject()
+                .put("model", LLM_MODEL)
+                .put("stream", false)
+                .put("temperature", 0.2)
+                .put("max_tokens", 2000)
+                .put("messages", messages)
+            val resp = JSONObject(postJson(LLM_URL, deepSeekKey, body, label))
+            val content = resp.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .optString("content")
+                .trim()
+            require(content.isNotEmpty()) { "$label 返回空内容" }
+            content
+        }
+
     suspend fun chat(deepSeekKey: String, question: String, context: Context? = null): String {
         VoiceMvpLog.i("LLM", "开始思考: question=${question.take(200)}")
         val memoryText = if (context != null && Store.cloudMemoryEnabled(context)) {
@@ -381,6 +403,7 @@ object VoiceMvpClient {
 
     /**
      * 旁听决策：返回 null 表示保持沉默；返回非空字符串表示要开口说的话。
+     * history 为预格式化的工作记忆原话行（摘要之外的部分），summary 为滚动摘要。
      */
     suspend fun decide(
         deepSeekKey: String,
@@ -389,7 +412,8 @@ object VoiceMvpClient {
         history: List<String>,
         context: Context? = null,
         memories: List<String> = emptyList(),
-        myInfo: String = ""
+        myInfo: String = "",
+        summary: String = ""
     ): String? {
         val isBasic = detectTool(transcript) != null
         val hasWake = transcript.contains("云雀")
@@ -415,14 +439,16 @@ object VoiceMvpClient {
                     "输出格式：要么 SILENT，要么 SPEAK:后面跟你想说的话。"
         }
         val roleContext = buildRoleContext(context, transcript)
-        val contextText = history.takeLast(8).joinToString("\n") { "旁听：$it" }
+        val contextText = history.joinToString("\n")
+        val summaryText = if (summary.isBlank()) "" else "【近期对话摘要】\n$summary\n\n"
         val memoryText = if (memories.isNotEmpty()) {
             memories.takeLast(20).joinToString("\n") { "记忆中：$it" }
         } else {
             ""
         }
         val myInfoText = if (myInfo.isBlank()) "" else "我的信息：$myInfo\n"
-        val prompt = "$roleContext$myInfoText$memoryText\n$contextText\n\n当前这句话：$transcript\n\n请判断云雀是否应该开口。只回答 SILENT 或 SPEAK:内容。"
+        // 分层排布：稳定内容在前（人设/摘要/原话），动态检索贴着当前句，前缀缓存友好
+        val prompt = "$roleContext$myInfoText$summaryText$contextText\n\n$memoryText\n\n当前这句话：$transcript\n\n请判断云雀是否应该开口。只回答 SILENT 或 SPEAK:内容。"
         VoiceMvpLog.i("DECIDE", "mode=$mode transcript=${transcript.take(120)}")
         val forcedTool = detectTool(transcript)
         val content = completeWithTools(deepSeekKey, system, prompt, context, "DECIDE", forcedTool)

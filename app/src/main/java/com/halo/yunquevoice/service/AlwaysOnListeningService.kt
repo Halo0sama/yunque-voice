@@ -25,6 +25,7 @@ import com.halo.yunquevoice.memory.MemoryDb
 import com.halo.yunquevoice.memory.RelationshipExtractor
 import com.halo.yunquevoice.memory.SpeakerEngine
 import com.halo.yunquevoice.memory.SpeakerProfile
+import com.halo.yunquevoice.memory.WorkingMemory
 import com.halo.yunquevoice.ui.MainShellComposeActivity
 import com.halo.yunquevoice.voice.BailianMemory
 import com.halo.yunquevoice.voice.DashScopeFiletrans
@@ -65,11 +66,14 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_UPLOAD = "com.halo.yunquevoice.action.TEST_UPLOAD"
         const val ACTION_TEST_FILETRANS = "com.halo.yunquevoice.action.TEST_FILETRANS"
         const val ACTION_TEST_RELATIONS = "com.halo.yunquevoice.action.TEST_RELATIONS"
+        const val ACTION_TEST_COMPACTION = "com.halo.yunquevoice.action.TEST_COMPACTION"
 
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
         const val NOTIF_ID = 1001
         const val SAMPLE_RATE = 16000
+        private const val UPLOAD_BATCH_MAX = 24
+        private const val UPLOAD_IDLE_MS = 120_000L
 
         @Volatile
         var isRunning = false
@@ -96,11 +100,16 @@ class AlwaysOnListeningService : Service() {
         val speakerId: String
     )
 
-    private val history = ArrayDeque<String>()
     private val segmentBuffer = ByteArrayOutputStream()
     private val preRoll = ArrayDeque<ByteArray>()
     private val pendingSegments = mutableListOf<PendingSegment>()
     private val cloudSpeakerMap = HashMap<Int, String>()
+
+    // 会话簇合并上传：攒一批再上云（计费按次），静默/满额/停服务三条件冲刷
+    private val pendingUploads = mutableListOf<BailianMemory.UploadItem>()
+    private val uploadLock = Any()
+    @Volatile private var uploadIdleScheduled = false
+    @Volatile private var compacting = false
     @Volatile private var diarizationRunning = false
     @Volatile private var inSpeech = false
     @Volatile private var silenceMs = 0L
@@ -122,8 +131,21 @@ class AlwaysOnListeningService : Service() {
                 startAsForeground()
                 startCapture()
                 YunqueApiServer.start(this)
-                scope.launch { runCatching { BailianMemory.flushOutbox(this@AlwaysOnListeningService) } }
+                scope.launch {
+                    runCatching { BailianMemory.flushOutbox(this@AlwaysOnListeningService) }
+                    runCatching { maybeCompact() }
+                }
                 broadcastStatus("listening")
+            }
+            ACTION_TEST_COMPACTION -> {
+                val cutoffHours = intent?.getLongExtra("cutoff_hours", 24L) ?: 24L
+                scope.launch {
+                    val deepKey = Store.deepSeekKey(this@AlwaysOnListeningService)
+                    runCatching {
+                        WorkingMemory.compact(this@AlwaysOnListeningService, memoryDb, deepKey, "手动", cutoffHours)
+                    }
+                    VoiceMvpLog.i("WORKMEM", "手动压缩触发完成")
+                }
             }
             ACTION_STOP -> {
                 SoundCue.playStop()
@@ -152,6 +174,13 @@ class AlwaysOnListeningService : Service() {
             ACTION_TEST_TRANSCRIPT -> {
                 val text = intent?.getStringExtra("text") ?: "云雀，你觉得这件事怎么办？"
                 VoiceMvpLog.i("SERVICE", "收到测试旁听文本：$text")
+                // 测试钩子：模拟真实片段入上传簇，让簇合并链路可以纯文本验证
+                if (Store.cloudMemoryEnabled(this)) {
+                    synchronized(uploadLock) {
+                        pendingUploads.add(BailianMemory.UploadItem(text, "主人", System.currentTimeMillis()))
+                    }
+                    scheduleIdleFlush()
+                }
                 scope.launch { handleTranscriptText(text) }
             }
             ACTION_TEST_UPLOAD -> {
@@ -496,15 +525,17 @@ class AlwaysOnListeningService : Service() {
             )
         )
         VoiceMvpLog.i("MEMORY", "已记录说话人「${speaker.name}」: ${text.take(80)}")
-        // 云端记忆：每句必传（verbatim + 说话人元数据），失败进 outbox 稍后重发
+        WorkingMemory.stat(memoryDb, "segments_captured")
+        // 云端记忆：会话簇合并上传（一次调用带整簇），失败整批进 outbox
         val clean = text.filter { !it.isWhitespace() }
         if (Store.cloudMemoryEnabled(this) && (clean.length >= 4 || isMemoryCommand(text))) {
-            val svc = this
-            val spName = speaker.name
-            scope.launch {
-                runCatching { BailianMemory.appendReliably(svc, text, spName) }
-                    .onFailure { VoiceMvpLog.w("BAILIAN", "记忆写入失败（已入 outbox）: ${it.message}") }
+            val flushNow = synchronized(uploadLock) {
+                pendingUploads.add(BailianMemory.UploadItem(text, speaker.name, System.currentTimeMillis()))
+                pendingUploads.size >= UPLOAD_BATCH_MAX
             }
+            if (flushNow) flushUploadsAsync() else scheduleIdleFlush()
+        } else if (clean.length < 4) {
+            WorkingMemory.stat(memoryDb, "noise_filtered")
         }
         pendingSegments.add(PendingSegment(seg, text, convId, speaker.id))
         if (pendingSegments.size >= 4 && !diarizationRunning) {
@@ -525,6 +556,67 @@ class AlwaysOnListeningService : Service() {
     private fun isMemoryCommand(text: String): Boolean =
         text.contains("记住") || text.contains("记一下") ||
             text.contains("别忘了") || text.contains("你要记住")
+
+    /* ───────────── 会话簇上传与工作记忆压缩 ───────────── */
+
+    private fun scheduleIdleFlush() {
+        if (uploadIdleScheduled) return
+        uploadIdleScheduled = true
+        mainHandler.postDelayed({
+            uploadIdleScheduled = false
+            flushUploadsAsync()
+        }, UPLOAD_IDLE_MS)
+    }
+
+    private fun flushUploadsAsync() {
+        val batch = synchronized(uploadLock) {
+            if (pendingUploads.isEmpty()) return
+            val b = pendingUploads.toList()
+            pendingUploads.clear()
+            b
+        }
+        WorkingMemory.stat(memoryDb, "upload_calls")
+        WorkingMemory.stat(memoryDb, "upload_sentences", batch.size.toDouble())
+        scope.launch {
+            runCatching { BailianMemory.appendBatchReliably(this@AlwaysOnListeningService, batch) }
+                .onFailure { VoiceMvpLog.w("BAILIAN", "簇上传失败（整批入 outbox）: ${it.message}") }
+        }
+    }
+
+    /** 服务停止路径用：独立协程，不受 scope.cancel 影响，保证欠账冲出去。 */
+    private fun flushUploadsOnStop() {
+        val batch = synchronized(uploadLock) {
+            if (pendingUploads.isEmpty()) return
+            val b = pendingUploads.toList()
+            pendingUploads.clear()
+            b
+        }
+        WorkingMemory.stat(memoryDb, "upload_calls")
+        WorkingMemory.stat(memoryDb, "upload_sentences", batch.size.toDouble())
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching { BailianMemory.appendBatchReliably(this@AlwaysOnListeningService, batch) }
+                .onFailure { VoiceMvpLog.w("BAILIAN", "停止前簇上传失败（整批入 outbox）: ${it.message}") }
+        }
+    }
+
+    /** 惰性压缩：跨天第一句，或工作窗口超保险丝。并发用 compacting 标志挡。 */
+    private suspend fun maybeCompact() {
+        if (compacting) return
+        val db = memoryDb
+        val ctx = WorkingMemory.buildContext(db)
+        val needDaily = WorkingMemory.shouldDailyCompact(db)
+        val overFuse = WorkingMemory.overFuse(ctx)
+        if (!needDaily && !overFuse) return
+        if (overFuse) WorkingMemory.stat(db, "fuse_trips")
+        compacting = true
+        try {
+            val deepKey = Store.deepSeekKey(this)
+            if (deepKey.isBlank()) return
+            WorkingMemory.compact(this, db, deepKey, if (overFuse) "保险丝" else "每日")
+        } finally {
+            compacting = false
+        }
+    }
 
     private fun buildMyInfo(): String {
         val name = Store.myName(this)
@@ -649,8 +741,6 @@ class AlwaysOnListeningService : Service() {
                 }
             }
         }
-        history.addLast(text)
-        while (history.size > 10) history.removeFirst()
         VoiceMvpLog.i("SERVICE", "旁听: $text")
 
         // 仅聆听：对话记录、记忆提炼照常，只是不决策、不播报
@@ -661,11 +751,24 @@ class AlwaysOnListeningService : Service() {
             return
         }
 
+        // 惰性压缩：跨天第一句决策前，或保险丝超限时，先折叠旧原话再决策
+        maybeCompact()
+        val working = WorkingMemory.buildContext(memoryDb)
+        WorkingMemory.stat(memoryDb, "decide_calls")
+        WorkingMemory.stat(memoryDb, "decide_ctx_tokens", working.estTokens().toDouble())
+
         val mode = Store.listenMode(this)
+        val decideStart = System.currentTimeMillis()
         val reply = runCatching {
             val memories = if (Store.cloudMemoryEnabled(this)) {
                 runCatching { BailianMemory.search(this, text).map { it.content } }
+                    .onSuccess {
+                        WorkingMemory.stat(memoryDb, "retrieval_calls")
+                        WorkingMemory.stat(memoryDb, "retrieval_hits", it.size.toDouble())
+                        if (it.isEmpty()) WorkingMemory.stat(memoryDb, "retrieval_miss")
+                    }
                     .getOrElse {
+                        WorkingMemory.stat(memoryDb, "retrieval_fail")
                         VoiceMvpLog.w("BAILIAN", "记忆检索失败，本次无记忆上下文: ${it.message}")
                         emptyList()
                     }
@@ -673,20 +776,25 @@ class AlwaysOnListeningService : Service() {
                 emptyList()
             }
             VoiceMvpClient.decide(
-                deepKey, mode, text, history.toList(), this,
+                deepKey, mode, text, working.verbatimLines, this,
                 memories = memories,
-                myInfo = buildMyInfo()
+                myInfo = buildMyInfo(),
+                summary = working.summary
             )
         }.getOrElse {
+            WorkingMemory.stat(memoryDb, "decide_fail")
             VoiceMvpLog.e("SERVICE", "DECIDE failed: ${it.message}", it)
             return
         }
+        WorkingMemory.stat(memoryDb, "decide_ms", (System.currentTimeMillis() - decideStart).toDouble())
         if (reply == null) {
+            WorkingMemory.stat(memoryDb, "decide_silent")
             VoiceMvpLog.i("SERVICE", "决策：沉默")
             updateNotification("云雀正在聆听（刚旁听，未插话）", interrupting = true)
             broadcastStatus("listening")
             return
         }
+        WorkingMemory.stat(memoryDb, "decide_speak")
 
         VoiceMvpLog.i("SERVICE", "决策：开口 -> ${reply.take(120)}")
         val ttsFile = File(cacheDir, "yunque_proactive.wav")
@@ -798,6 +906,7 @@ class AlwaysOnListeningService : Service() {
     /* ───────────── 工具 ───────────── */
 
     private fun stopEverything() {
+        flushUploadsOnStop()
         notificationManager?.cancel(NOTIF_INTERRUPT_ID)
         stopCapture()
         interruptPlaybackSilently()

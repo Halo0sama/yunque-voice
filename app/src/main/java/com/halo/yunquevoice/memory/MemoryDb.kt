@@ -89,7 +89,7 @@ data class WorldEntry(
     var position: String
 )
 
-class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db", null, 8) {
+class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db", null, 9) {
 
     private var defaultsChecked = false
 
@@ -127,6 +127,8 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         createGraphPositions(db)
         createAboutMe(db)
         createRoleCards(db)
+        createSessionState(db)
+        createDailyStats(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -153,6 +155,91 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
             runCatching { db.execSQL("ALTER TABLE speakers ADD COLUMN cloud_speaker_id TEXT") }
             runCatching { db.execSQL("ALTER TABLE speakers ADD COLUMN canonical INTEGER DEFAULT 1") }
         }
+        if (oldVersion < 9) {
+            createSessionState(db)
+            createDailyStats(db)
+        }
+    }
+
+    private fun createSessionState(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS session_state (" +
+                "id INTEGER PRIMARY KEY CHECK (id = 1), " +
+                "summary TEXT DEFAULT '', summarized_until INTEGER DEFAULT 0, " +
+                "last_compaction_day TEXT DEFAULT '', updated_at INTEGER DEFAULT 0)"
+        )
+    }
+
+    private fun createDailyStats(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS daily_stats (" +
+                "date TEXT PRIMARY KEY, stats TEXT, updated_at INTEGER)"
+        )
+    }
+
+    /* ─────────── 工作记忆（会话状态） ─────────── */
+
+    data class SessionState(
+        val summary: String,
+        val summarizedUntilTs: Long,
+        val lastCompactionDay: String
+    )
+
+    fun loadSessionState(): SessionState {
+        readableDatabase.query("session_state", null, "id = 1", null, null, null, null).use { c ->
+            if (c.moveToFirst()) {
+                return SessionState(
+                    summary = c.getString(1) ?: "",
+                    summarizedUntilTs = c.getLong(2),
+                    lastCompactionDay = c.getString(3) ?: ""
+                )
+            }
+        }
+        return SessionState("", 0, "")
+    }
+
+    fun saveSessionState(state: SessionState) {
+        val values = ContentValues().apply {
+            put("id", 1)
+            put("summary", state.summary)
+            put("summarized_until", state.summarizedUntilTs)
+            put("last_compaction_day", state.lastCompactionDay)
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertWithOnConflict("session_state", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /* ─────────── 每日运行统计（试用调优用） ─────────── */
+
+    fun statAdd(date: String, key: String, delta: Double) {
+        val o = readDayStats(date)
+        o.put(key, o.optDouble(key, 0.0) + delta)
+        val values = ContentValues().apply {
+            put("date", date)
+            put("stats", o.toString())
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertWithOnConflict("daily_stats", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    private fun readDayStats(date: String): JSONObject {
+        readableDatabase.query("daily_stats", null, "date = ?", arrayOf(date), null, null, null).use { c ->
+            if (c.moveToFirst()) {
+                return runCatching { JSONObject(c.getString(1)) }.getOrElse { JSONObject() }
+            }
+        }
+        return JSONObject()
+    }
+
+    fun recentDailyStats(days: Int = 14): List<Pair<String, JSONObject>> {
+        val result = mutableListOf<Pair<String, JSONObject>>()
+        readableDatabase.query("daily_stats", null, null, null, null, null, "date DESC", days.toString()).use { c ->
+            while (c.moveToNext()) {
+                val stats = runCatching { JSONObject(c.getString(1)) }.getOrElse { JSONObject() }
+                result.add(c.getString(0) to stats)
+            }
+        }
+        return result
     }
 
     private fun createRelationships(db: SQLiteDatabase) {
@@ -406,6 +493,20 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
             }
         }
         return result
+    }
+
+    /** [fromTs, toTs] 内的对话，按时间正序，最多 limit 条（超出时保留最新的）。 */
+    fun conversationsBetween(fromTs: Long, toTs: Long, limit: Int = 500): List<ConversationRecord> {
+        val result = mutableListOf<ConversationRecord>()
+        readableDatabase.query(
+            "conversations", null, "ts >= ? AND ts <= ?",
+            arrayOf(fromTs.toString(), toTs.toString()), null, null, "ts DESC", limit.toString()
+        ).use { c ->
+            while (c.moveToNext()) {
+                result.add(fromConversation(c))
+            }
+        }
+        return result.asReversed()
     }
 
     fun updateConversationSpeaker(convId: Long, speakerId: String?, speakerName: String?) {

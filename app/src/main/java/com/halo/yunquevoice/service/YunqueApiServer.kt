@@ -97,6 +97,12 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
                     }
                     ok(arr.toString())
                 }
+                uri == "/api/stats" && session.method == Method.GET ->
+                    ok(statsJson().toString())
+                uri == "/api/log" && session.method == Method.GET -> {
+                    val n = session.parameters["n"]?.firstOrNull()?.toIntOrNull() ?: 300
+                    ok(JSONObject().put("tail", com.halo.yunquevoice.voice.VoiceMvpLog.tail(n)).toString())
+                }
                 uri == "/mcp" && session.method == Method.POST ->
                     ok(mcp(bodyOf(session)).toString())
                 else -> error(Response.Status.NOT_FOUND, "not found")
@@ -135,6 +141,7 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
                         if (nodeId.isNotBlank()) runBlocking { BailianMemory.delete(app, nodeId) }
                         "ok"
                     }
+                    "get_stats" -> statsJson().toString()
                     "search_conversations" -> {
                         val q = args.optString("query")
                         db.searchConversations(q).joinToString("\n") { "[${it.speakerName ?: "未知"}] ${it.text}" }
@@ -179,6 +186,24 @@ class LocalServer(private val app: Context) : NanoHTTPD("127.0.0.1", YunqueApiSe
     private suspend fun cloudMemoriesJson(pageSize: Int, pageNum: Int): JSONArray {
         val (nodes, _) = BailianMemory.list(app, pageSize, pageNum)
         return nodesToJson(nodes)
+    }
+
+    /** 试用周调优数据：每日统计 + 工作记忆状态 + outbox 欠账。 */
+    private fun statsJson(): JSONObject {
+        val days = JSONArray()
+        for ((date, stats) in db.recentDailyStats(14)) {
+            days.put(JSONObject().put("date", date).put("stats", stats))
+        }
+        val state = db.loadSessionState()
+        val working = JSONObject()
+            .put("summary_chars", state.summary.length)
+            .put("summarized_until", state.summarizedUntilTs)
+            .put("last_compaction_day", state.lastCompactionDay)
+        return JSONObject()
+            .put("daily", days)
+            .put("working_memory", working)
+            .put("outbox_pending", BailianMemory.outboxSize(app))
+            .put("log_file", com.halo.yunquevoice.voice.VoiceMvpLog.logPath())
     }
 
     private fun dbToJson(list: List<com.halo.yunquevoice.memory.ConversationRecord>): JSONArray {

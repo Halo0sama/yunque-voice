@@ -45,15 +45,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - `SoundCue`：开启/关闭提示音（上行/下行音阶）。
 - `BailianMemory`：阿里云记忆库添加/检索。
 
-### 记忆与数据
-- **长期记忆纯云端**：每句旁听实时写入阿里云百炼记忆库（`BailianMemory.appendReliably`，verbatim + speaker/meta_data，噪声门过滤短句）；显式“记住”指令走 custom_content 原样存储；断网写入进 `filesDir/memory_outbox.jsonl`（上限 500 条），恢复后自动冲刷。
-- 检索：`SearchMemory` Lite 档 top_k=6，注入 `decide()`（旁听决策）与 `chat()`（对话）。
-- 记忆板块 UI 直连云端：ListMemory 分页列表 / 语义搜索 / DeleteMemory / 手动添加；首次打开自动把本地旧 memories 迁移上云并清空本地表。
-- 请求必带 `X-DashScope-WorkspaceId` 头与 `memory_library_id`（缺一即 ServiceNotOpened，2026-08-29 实测）。
-- `MemoryDb`：speakers / conversations / relationships / graph_positions / about_me / role_cards / world_books / world_entries（memories 表已退役，仅存迁移前残留）。
-- `RelationshipExtractor`、`AboutMeExtractor`：自动提炼（每 5 段触发，本地结构化数据）。
-- `RoleCardIO`：Tavern JSON/PNG 角色卡与世界书导入导出。
-- `TavernPngIO`：PNG tEXt 角色卡读写。
+### 记忆与数据（v0.6.0 起三层结构）
+- **长期记忆（云端）**：会话簇合并上传——服务内攒批（≥24 句 / 静默 2 分钟 / 停服务三条件冲刷），`BailianMemory.appendBatchReliably` 一次调用带整簇（计费按次，单次实测上限 50~63 条）；显式”记住”走 verbatim 立即上传；断网整批入 `filesDir/memory_outbox.jsonl`（上限 500 行），恢复自动冲刷。
+- **工作记忆（本地）**：`WorkingMemory`——决策上下文 = session_state.summary（滚动摘要）+ 近 48h 原话窗口（≤80 句/24K 字），全部从 conversations 表重建，重启零失忆；prompt 分层排布吃前缀缓存。
+- **压缩（桥梁）**：惰性每日压缩（跨天第一句/服务启动时触发）+ 保险丝（窗口估算 token > 24K 提前压缩）：把旧原话折进摘要（DeepSeek completeRaw，≤600 字），新事实自动 AddMemory 上云。`ACTION_TEST_COMPACTION --el cutoff_hours N` 可手动触发。
+- 检索：`SearchMemory` Lite 档 top_k=6，注入 `decide()` 与 `chat()`。
+- 记忆板块 UI 直连云端：ListMemory 分页 / 语义搜索 / DeleteMemory / 手动添加；首次打开自动迁移本地旧 memories。
+- 请求必带 `X-DashScope-WorkspaceId` 头与 `memory_library_id`（缺一即 ServiceNotOpened）。
+- **试用周观测**：`daily_stats` 表按日累计 segments_captured/noise_filtered/upload_calls/upload_sentences/retrieval_calls/hits/miss/decide_calls/speak/silent/fail/decide_ms/compaction_* 等指标；`GET /api/stats`（adb forward 8766）汇总最近 14 天 + 工作记忆状态 + outbox 欠账；`GET /api/log?n=300` 拉日志尾；MCP 工具 `get_stats`。VoiceMvpLog 落盘 cache/voice_mvp.log（4MB 轮转）。
+- `MemoryDb` v9：+ session_state、daily_stats；`RelationshipExtractor`、`AboutMeExtractor` 保留（每 5 段触发）。
 
 ### UI（Compose）
 - `MainShellComposeActivity`：主界面 + 悬浮玻璃底栏 + Crash 兼容模式。

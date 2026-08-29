@@ -135,6 +135,48 @@ object BailianMemory {
 
     private fun outboxFile(context: Context) = java.io.File(context.filesDir, "memory_outbox.jsonl")
 
+    fun outboxSize(context: Context): Int =
+        outboxFile(context).takeIf { it.exists() }?.readLines()?.count { it.isNotBlank() } ?: 0
+
+    /** 会话簇批量写入：一次调用带上整簇原话（计费按次，与条数无关，上限实测 ≥50 条）。 */
+    suspend fun appendBatchReliably(context: Context, items: List<UploadItem>) {
+        if (items.isEmpty()) return
+        try {
+            val (_, lib) = checkConfig(context)
+            val msgs = JSONArray()
+            for (it in items) {
+                msgs.put(
+                    JSONObject().put("role", "user")
+                        .put("content", "（${it.speaker}说）${it.text}")
+                )
+            }
+            val body = JSONObject()
+                .put("user_id", Store.memoryUserId(context))
+                .put("memory_library_id", lib)
+                .put("messages", msgs)
+                .put("meta_data", JSONObject().put("count", items.size))
+            call(context, authorized(context, "$BASE/add", body = body), "AddMemory(batch)")
+            VoiceMvpLog.i("BAILIAN", "簇上传成功 ${items.size} 句")
+            flushOutbox(context)
+        } catch (e: Throwable) {
+            synchronized(outboxLock) {
+                val f = outboxFile(context)
+                val lines = if (f.exists()) f.readLines().filter { it.isNotBlank() } else emptyList()
+                if (lines.size < OUTBOX_MAX) {
+                    val arr = JSONArray()
+                    for (it in items) {
+                        arr.put(JSONObject().put("text", it.text).put("speaker", it.speaker).put("ts", it.ts))
+                    }
+                    val line = JSONObject().put("mode", "batch").put("items", arr)
+                    f.writeText((lines + line.toString()).joinToString("\n"))
+                }
+            }
+            throw e
+        }
+    }
+
+    data class UploadItem(val text: String, val speaker: String, val ts: Long)
+
     /** 写入失败时入 outbox；成功时顺手冲刷历史欠账。verbatim=true 用原样存储（显式"记住"指令），否则交给云端提炼。失败原样抛出由调用方记日志。 */
     suspend fun appendReliably(
         context: Context,
@@ -172,10 +214,17 @@ object BailianMemory {
         for (line in lines) {
             try {
                 val o = JSONObject(line)
-                if (o.optString("mode") == "verbatim") {
-                    addCustom(context, o.optString("text"))
-                } else {
-                    append(context, o.optString("text"), o.optString("speaker", "未知"), o.optLong("ts"))
+                when (o.optString("mode")) {
+                    "verbatim" -> addCustom(context, o.optString("text"))
+                    "batch" -> {
+                        val arr = o.optJSONArray("items") ?: JSONArray()
+                        val items = (0 until arr.length()).map { i ->
+                            val it = arr.getJSONObject(i)
+                            UploadItem(it.optString("text"), it.optString("speaker", "未知"), it.optLong("ts"))
+                        }
+                        appendBatchReliably(context, items)
+                    }
+                    else -> append(context, o.optString("text"), o.optString("speaker", "未知"), o.optLong("ts"))
                 }
             } catch (e: Throwable) {
                 failed.add(line)
