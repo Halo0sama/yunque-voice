@@ -488,7 +488,7 @@ private fun ChatScreen(context: android.content.Context, modifier: Modifier = Mo
         scope.launch {
             runCatching {
                 VoiceMvpClient.chat(
-                    Store.deepSeekKey(context), text, context,
+                    Store.llmActiveKey(context), text, context,
                     recentTurns = turns, workingSummary = db.loadSessionState().summary
                 )
             }.onSuccess { reply ->
@@ -930,12 +930,13 @@ private fun YunqueBottomSheet(
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(context: android.content.Context) {
-    var deepKey by remember { mutableStateOf(Store.deepSeekKey(context)) }
+    var deepKey by remember { mutableStateOf(Store.llmActiveKey(context)) }
     var dashKey by remember { mutableStateOf(Store.dashScopeKey(context)) }
     var workspace by remember { mutableStateOf(Store.workspaceId(context)) }
     var memoryLib by remember { mutableStateOf(Store.memoryLibraryId(context)) }
     var showAiCard by remember { mutableStateOf(false) }
-    var llmProvider by remember { mutableStateOf(Store.llmProvider(context)) }
+    var aiProviderEdit by remember { mutableStateOf(Store.llmProvider(context)) }
+    var keyDraft by remember { mutableStateOf(Store.llmActiveKey(context)) }
     var operitUrl by remember { mutableStateOf(Store.operitUrl(context)) }
     var operitToken by remember { mutableStateOf(Store.operitToken(context)) }
     var showOperit by remember { mutableStateOf(false) }
@@ -949,7 +950,7 @@ private fun SettingsScreen(context: android.content.Context) {
     var showListenSheet by remember { mutableStateOf(false) }
     var textReply by remember { mutableStateOf(Store.listenOnlyTextReply(context)) }
     var showAudioSheet by remember { mutableStateOf(false) }
-    var audioInput by remember { mutableStateOf(Store.audioInput(context)) }
+    var audioSelTick by remember { mutableStateOf(0) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     QuickNav("AI 与接口") { showAiCard = true }
@@ -960,34 +961,80 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("仅聆听与对话") { showListenSheet = true }
     QuickNav("麦克风与音质") { showAudioSheet = true }
     if (showAudioSheet) {
+        val am = context.getSystemService(android.media.AudioManager::class.java)
+        var inSel by remember { mutableStateOf(Store.audioInputDevice(context)) }
+        var outSel by remember { mutableStateOf(Store.audioOutput(context)) }
+        fun applyInput(sel: String) {
+            inSel = sel
+            Store.saveAudioInputDevice(context, sel)
+            context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
+                action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
+            })
+        }
+        fun audioTypeName(t: Int): String = when (t) {
+            android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC -> "手机麦克风"
+            android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "手机扬声器"
+            android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "蓝牙通话麦克风"
+            android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "蓝牙耳机"
+            android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "有线带麦耳机"
+            android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "有线耳机"
+            android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+            android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> "USB音频设备"
+            else -> "音频设备"
+        }
         YunqueBottomSheet(onDismiss = { showAudioSheet = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text("麦克风与音质", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
                 Text(
-                    "手机麦克风：收全环境的声音，蓝牙耳机只负责出声，音乐视频音质不受影响（推荐日常使用）。\n" +
-                        "耳机麦克风：声音从耳机麦收，适合戴着耳机自言自语；受蓝牙协议限制，开启期间耳机里媒体音质会下降。",
+                    "设备显示系统原始名称。输入用手机麦时蓝牙耳机只负责出声，音乐视频音质不受影响；\n" +
+                        "选蓝牙通话麦克风时走 SCO 通道，耳机里媒体音质会下降（蓝牙协议限制）。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text("声音输入", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 TextButton(
-                    onClick = {
-                        audioInput = Store.AUDIO_PHONE
-                        Store.saveAudioInput(context, Store.AUDIO_PHONE)
-                        context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
-                            action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
-                        })
-                    },
+                    onClick = { applyInput("builtin") },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (audioInput == Store.AUDIO_PHONE) "✓ 手机麦克风（推荐）" else "手机麦克风（推荐）") }
+                ) { Text(if (inSel == "builtin") "✓ 手机麦克风（推荐）" else "手机麦克风（推荐）") }
+                am.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+                    .filter {
+                        it.type in intArrayOf(
+                            android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                            android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                            android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+                            android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+                        )
+                    }
+                    .forEach { d ->
+                        val key = "t${d.type}:a${d.address}"
+                        val name = d.productName?.toString()?.ifBlank { audioTypeName(d.type) } ?: audioTypeName(d.type)
+                        TextButton(onClick = { applyInput(key) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (inSel == key) "✓ $name" else name)
+                        }
+                    }
+                Spacer(Modifier.size(8.dp))
+                Text("声音输出（云雀说话）", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 TextButton(
-                    onClick = {
-                        audioInput = Store.AUDIO_EARPHONE
-                        Store.saveAudioInput(context, Store.AUDIO_EARPHONE)
-                        context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
-                            action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
-                        })
-                    },
+                    onClick = { outSel = "auto"; Store.saveAudioOutput(context, "auto") },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (audioInput == Store.AUDIO_EARPHONE) "✓ 耳机麦克风（媒体音质会下降）" else "耳机麦克风（媒体音质会下降）") }
+                ) { Text(if (outSel == "auto") "✓ 跟随系统" else "跟随系统") }
+                am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                    .filter {
+                        it.type in intArrayOf(
+                            android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+                            android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                            android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                            android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                            android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+                            android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+                        )
+                    }
+                    .forEach { d ->
+                        val key = "t${d.type}:a${d.address}"
+                        val name = d.productName?.toString()?.ifBlank { audioTypeName(d.type) } ?: audioTypeName(d.type)
+                        TextButton(onClick = { outSel = key; Store.saveAudioOutput(context, key) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (outSel == key) "✓ $name" else name)
+                        }
+                    }
             }
         }
     }
@@ -1050,22 +1097,36 @@ private fun SettingsScreen(context: android.content.Context) {
         YunqueBottomSheet(onDismiss = { showAiCard = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text("AI 与接口", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-                Text("对话模型", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("对话模型（点击即切换，各家的 Key 分别保存）", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = llmProvider == Store.LLM_DEEPSEEK,
-                        onClick = { llmProvider = Store.LLM_DEEPSEEK; Store.saveLlmProvider(context, Store.LLM_DEEPSEEK) },
-                        label = { Text("DeepSeek") }
-                    )
-                    FilterChip(
-                        selected = llmProvider == Store.LLM_ZHIPU,
-                        onClick = { llmProvider = Store.LLM_ZHIPU; Store.saveLlmProvider(context, Store.LLM_ZHIPU) },
-                        label = { Text("智谱 GLM") }
-                    )
+                    Store.LLM_PROVIDERS.forEach { p ->
+                        val label = when (p) {
+                            Store.LLM_ZHIPU -> "智谱 GLM"
+                            Store.LLM_QWEN -> "Qwen（阿里）"
+                            else -> "DeepSeek"
+                        }
+                        FilterChip(
+                            selected = aiProviderEdit == p,
+                            onClick = {
+                                aiProviderEdit = p
+                                keyDraft = Store.llmKey(context, p)
+                                Store.saveLlmProvider(context, p)
+                            },
+                            label = { Text(if (aiProviderEdit == p) "✓ $label" else label) }
+                        )
+                    }
                 }
-                OutlinedTextField(value = deepKey, onValueChange = { deepKey = it }, label = { Text("对话模型 API Key（随上方供应商）") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = keyDraft,
+                    onValueChange = {
+                        keyDraft = it
+                        Store.saveLlmKey(context, aiProviderEdit, it)
+                    },
+                    label = { Text("${when (aiProviderEdit) { Store.LLM_ZHIPU -> "智谱"; Store.LLM_QWEN -> "阿里Qwen"; else -> "DeepSeek" }} API Key") },
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(Modifier.padding(top = 8.dp))
-                OutlinedTextField(value = dashKey, onValueChange = { dashKey = it }, label = { Text("阿里云百炼 API Key") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = dashKey, onValueChange = { dashKey = it }, label = { Text("阿里云百炼 API Key（识别/语音/记忆）") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.padding(top = 8.dp))
                 OutlinedTextField(value = workspace, onValueChange = { workspace = it }, label = { Text("业务空间 ID") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.padding(top = 8.dp))

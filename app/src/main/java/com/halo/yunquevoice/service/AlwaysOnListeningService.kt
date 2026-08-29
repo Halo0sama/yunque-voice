@@ -139,7 +139,7 @@ class AlwaysOnListeningService : Service() {
             ACTION_TEST_COMPACTION -> {
                 val cutoffHours = intent?.getLongExtra("cutoff_hours", 24L) ?: 24L
                 scope.launch {
-                    val deepKey = Store.deepSeekKey(this@AlwaysOnListeningService)
+                    val deepKey = Store.llmActiveKey(this@AlwaysOnListeningService)
                     runCatching {
                         WorkingMemory.compact(this@AlwaysOnListeningService, memoryDb, deepKey, "手动", cutoffHours)
                     }
@@ -238,7 +238,7 @@ class AlwaysOnListeningService : Service() {
                 }
             }
             ACTION_TEST_RELATIONS -> {
-                val key = Store.deepSeekKey(this)
+                val key = Store.llmActiveKey(this)
                 scope.launch {
                     RelationshipExtractor.extract(memoryDb, key)
                 }
@@ -369,11 +369,15 @@ class AlwaysOnListeningService : Service() {
             VoiceMvpLog.e("SERVICE", "AudioRecord getMinBufferSize=$minBuf")
             return
         }
-        // 音频输入源：手机麦克风（默认，蓝牙媒体走 A2DP 不降质）或耳机麦克风（SCO 通话通道）
-        val useEarphone = Store.audioInput(this) == Store.AUDIO_EARPHONE
-        val source = if (useEarphone) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        // 音频输入源：按用户选择的物理设备（原始名展示），蓝牙 SCO 麦仍需激活通话通道
+        val sel = Store.audioInputDevice(this)
+        val am0 = getSystemService(AudioManager::class.java)
+        val preferred = findAudioDevice(am0, isInput = true, sel = sel)
+        val scoWanted = preferred?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            (sel == "builtin" && Store.audioInput(this) == Store.AUDIO_EARPHONE)
+        val source = if (scoWanted) MediaRecorder.AudioSource.VOICE_COMMUNICATION
         else MediaRecorder.AudioSource.VOICE_RECOGNITION
-        if (useEarphone) {
+        if (scoWanted) {
             selectBluetoothInput()
         } else {
             clearBluetoothInput()
@@ -391,10 +395,12 @@ class AlwaysOnListeningService : Service() {
             record.release()
             return
         }
+        runCatching { if (preferred != null && !scoWanted) record.preferredDevice = preferred }
         audioRecord = record
         capturing = true
         record.startRecording()
-        VoiceMvpLog.i("SERVICE", "持续采集已启动 buffer=$bufferSize 输入=${if (useEarphone) "耳机麦克风(SCO)" else "手机麦克风"}")
+        val inLabel = preferred?.productName?.ifBlank { null } ?: if (scoWanted) "耳机麦克风(SCO)" else "手机麦克风"
+        VoiceMvpLog.i("SERVICE", "持续采集已启动 buffer=$bufferSize 输入=$inLabel")
         captureThread = Thread {
             val buf = ByteArray(bufferSize)
             while (capturing) {
@@ -442,6 +448,28 @@ class AlwaysOnListeningService : Service() {
             VoiceMvpLog.i("SERVICE", "已切回手机麦克风输入（蓝牙媒体保持高音质）")
         }.onFailure {
             VoiceMvpLog.w("SERVICE", "clearBluetoothInput failed: ${it.message}")
+        }
+    }
+
+    /** 按 "t<type>:a<address>" 或 "builtin"/"auto"/"speaker" 解析系统音频设备。 */
+    private fun findAudioDevice(am: AudioManager, isInput: Boolean, sel: String): AudioDeviceInfo? {
+        if (!sel.startsWith("t") || !sel.contains(":a")) return null
+        return runCatching {
+            val type = sel.substringAfter('t').substringBefore(":a").toInt()
+            val addr = sel.substringAfter(":a")
+            val flags = if (isInput) AudioManager.GET_DEVICES_INPUTS else AudioManager.GET_DEVICES_OUTPUTS
+            am.getDevices(flags).firstOrNull { it.type == type && it.address == addr }
+        }.getOrNull()
+    }
+
+    /** TTS 输出设备：auto 跟随系统；speaker 扬声器；t<type>:a<addr> 指定设备（如蓝牙耳机 A2DP）。 */
+    private fun resolveOutputDevice(): AudioDeviceInfo? {
+        return when (val sel = Store.audioOutput(this)) {
+            "auto" -> null
+            "speaker" -> getSystemService(AudioManager::class.java)
+                .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            else -> findAudioDevice(getSystemService(AudioManager::class.java), isInput = false, sel = sel)
         }
     }
 
@@ -554,7 +582,7 @@ class AlwaysOnListeningService : Service() {
     /* ───────────── ASR + 决策 + 播报 ───────────── */
 
     private suspend fun handleSegment(seg: ByteArray) {
-        val deepKey = Store.deepSeekKey(this)
+        val deepKey = Store.llmActiveKey(this)
         val dashKey = Store.dashScopeKey(this)
         if (deepKey.isBlank() || dashKey.isBlank()) {
             VoiceMvpLog.w("SERVICE", "keys missing, skip segment")
@@ -595,7 +623,7 @@ class AlwaysOnListeningService : Service() {
         pendingMemoryCount++
         if (pendingMemoryCount >= 5) {
             pendingMemoryCount = 0
-            val key = Store.deepSeekKey(this)
+            val key = Store.llmActiveKey(this)
             scope.launch {
                 RelationshipExtractor.extract(memoryDb, key)
                 AboutMeExtractor.extract(memoryDb, key)
@@ -617,7 +645,7 @@ class AlwaysOnListeningService : Service() {
         if (overFuse) WorkingMemory.stat(db, "fuse_trips")
         compacting = true
         try {
-            val deepKey = Store.deepSeekKey(this)
+            val deepKey = Store.llmActiveKey(this)
             if (deepKey.isBlank()) return
             WorkingMemory.compact(this, db, deepKey, if (overFuse) "保险丝" else "每日")
         } finally {
@@ -724,7 +752,7 @@ class AlwaysOnListeningService : Service() {
 
     /** 拿到一段旁听文字后：进上下文、决策、必要时 TTS 并播放。 */
     private suspend fun handleTranscriptText(text: String) {
-        val deepKey = Store.deepSeekKey(this)
+        val deepKey = Store.llmActiveKey(this)
         val dashKey = Store.dashScopeKey(this)
         if (deepKey.isBlank() || dashKey.isBlank()) {
             VoiceMvpLog.w("SERVICE", "keys missing, skip transcript")
@@ -863,6 +891,8 @@ class AlwaysOnListeningService : Service() {
                 )
                 player.setDataSource(file.absolutePath)
                 player.prepare()
+                // 输出设备路由：auto 跟随系统；扬声器/指定蓝牙耳机在此锚定（A2DP 高音质）
+                runCatching { resolveOutputDevice()?.let { player.preferredDevice = it } }
                 currentPlayer = player
                 currentTtsFile = file
                 currentTtsPlayStartMs = System.currentTimeMillis()

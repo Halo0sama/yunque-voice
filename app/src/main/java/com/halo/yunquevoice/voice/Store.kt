@@ -30,6 +30,8 @@ object Store {
     private const val KEY_LISTEN_ONLY_TEXT_REPLY = "listen_only_text_reply"
     private const val KEY_LLM_PROVIDER = "llm_provider"
     private const val KEY_AUDIO_INPUT = "audio_input"
+    private const val KEY_AUDIO_INPUT_DEVICE = "audio_input_device"
+    private const val KEY_AUDIO_OUTPUT = "audio_output"
 
     const val AUDIO_PHONE = "phone"
     const val AUDIO_EARPHONE = "earphone"
@@ -47,8 +49,10 @@ object Store {
 
     const val LLM_DEEPSEEK = "deepseek"
     const val LLM_ZHIPU = "zhipu"
+    const val LLM_QWEN = "qwen"
+    val LLM_PROVIDERS = listOf(LLM_DEEPSEEK, LLM_ZHIPU, LLM_QWEN)
 
-    /** 对话/决策/提炼所用大模型的供应商。Key 复用 deepseek_key 存储（语义为"对话模型 Key"）。 */
+    /** 对话模型供应商（deepseek / zhipu / qwen），各供应商 Key 独立保存，切换即换。 */
     fun llmProvider(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LLM_PROVIDER, LLM_DEEPSEEK)
             ?: LLM_DEEPSEEK
@@ -56,6 +60,50 @@ object Store {
     fun saveLlmProvider(context: Context, provider: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
             putString(KEY_LLM_PROVIDER, provider)
+        }
+    }
+
+    /** 当前供应商的 Key（旧版存在 deepseek_key 里的自动迁移）。 */
+    fun llmKey(context: Context, provider: String): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        prefs.getString("llm_key_$provider", null)?.let { return it }
+        if (provider == LLM_DEEPSEEK) {
+            val legacy = prefs.getString(KEY_DEEPSEEK, null).orEmpty()
+            if (legacy.isNotBlank()) {
+                prefs.edit { putString("llm_key_$provider", legacy) }
+                return legacy
+            }
+        }
+        return ""
+    }
+
+    fun saveLlmKey(context: Context, provider: String, key: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString("llm_key_$provider", key.trim())
+        }
+    }
+
+    /** 当前供应商的 Key，调用方一句拿到。 */
+    fun llmActiveKey(context: Context): String = llmKey(context, llmProvider(context))
+
+    /** 输入设备选择："builtin"（手机麦）或 "t<type>:a<address>"（具体设备，界面展示原始名）。 */
+    fun audioInputDevice(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_AUDIO_INPUT_DEVICE, "builtin")
+            ?: "builtin"
+
+    fun saveAudioInputDevice(context: Context, sel: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_AUDIO_INPUT_DEVICE, sel)
+        }
+    }
+
+    /** TTS 输出："auto"（跟随系统）、"speaker"（手机扬声器）或 "t<type>:a<address>"（指定设备）。 */
+    fun audioOutput(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_AUDIO_OUTPUT, "auto") ?: "auto"
+
+    fun saveAudioOutput(context: Context, sel: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_AUDIO_OUTPUT, sel)
         }
     }
 

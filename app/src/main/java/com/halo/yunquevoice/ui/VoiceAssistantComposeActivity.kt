@@ -117,7 +117,7 @@ private fun VoiceScreen() {
     fun startPipeline() {
         scope.launch {
             try {
-                val deep = Store.deepSeekKey(context)
+                val deep = Store.llmActiveKey(context)
                 val dash = Store.dashScopeKey(context)
                 if (deep.isBlank() || dash.isBlank()) {
                     status = "请先设置 API Key"

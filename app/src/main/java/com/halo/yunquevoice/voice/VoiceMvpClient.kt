@@ -28,12 +28,29 @@ object VoiceMvpClient {
     /** 对话模型供应商路由：均为 OpenAI 兼容协议（含工具调用）。 */
     private fun llmEndpoint(provider: String): String = when (provider) {
         Store.LLM_ZHIPU -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        Store.LLM_QWEN -> "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         else -> "https://api.deepseek.com/chat/completions"
     }
 
     private fun llmModel(provider: String): String = when (provider) {
         Store.LLM_ZHIPU -> "glm-5.3-flash"
+        Store.LLM_QWEN -> "qwen3.8-flash"
         else -> "deepseek-v4-flash"
+    }
+
+    /**
+     * 各家思考模式（实测）：
+     * - deepseek-v4-flash：thinking.type=disabled 可关
+     * - qwen3.8-flash：enable_thinking=false 可关
+     * - glm-5.3-flash：常思考不可关，depth=low 最浅
+     * 实时对话路径统一走"关闭或最浅"，压缩/提炼等夜间任务保持各家默认。
+     */
+    private fun applyRealtimeThinking(body: JSONObject, provider: String) {
+        when (provider) {
+            Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "disabled"))
+            Store.LLM_QWEN -> body.put("enable_thinking", false)
+            Store.LLM_ZHIPU -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "low"))
+        }
     }
 
     private val client = OkHttpClient.Builder()
@@ -241,10 +258,8 @@ object VoiceMvpClient {
                 .put("temperature", if (label == "DECIDE") 0.2 else 0.3)
                 .put("messages", messages)
                 .put("tools", toolDefs)
-            // 实时对话路径用最浅思考档：glm-5.3 是常思考模型，low 档显著降低延迟与 token
-            if (provider == Store.LLM_ZHIPU) {
-                body.put("thinking", JSONObject().put("type", "enabled").put("depth", "low"))
-            }
+            // 实时对话路径：思考关闭或最浅（各家能力见 applyRealtimeThinking）
+            applyRealtimeThinking(body, provider)
             val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val message = resp.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val toolCalls = message.optJSONArray("tool_calls")

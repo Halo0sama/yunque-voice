@@ -19,7 +19,8 @@
 - OkHttp、Coroutines、NanoHTTPD
 - ffmpeg-kit（`dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7`）
 - LiquidGlass（`io.github.nadeemiqbal:liquid-glass:0.2.3`）
-- 对话模型可切换（v0.8.0）：DeepSeek deepseek-v4-flash / 智谱 glm-5.3-flash（`Store.llmProvider`，OpenAI 兼容含工具调用；智谱为推理模型带 reasoning_content）
+- 对话模型三家可切（v0.11.0）：DeepSeek deepseek-v4-flash / 智谱 glm-5.3-flash / 阿里 qwen3.8-flash，Key 各自保存一键切换（`Store.llmKey/provider`）
+- 思考模式（实测）：deepseek `thinking.type=disabled` 可关；qwen `enable_thinking=false` 可关；智谱常思考仅 depth 分档 → 实时路径统一"关或最浅"，压缩/提炼用各家默认
 
 ## 构建与安装
 ```bash
@@ -110,6 +111,12 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   - Manifest 中 `VoiceAssistantComposeActivity`、`MvpVoiceInteractionService`、`MvpVoiceAssistantService`、`MvpRecognitionService`
 - 蓝牙耳机功能键行为：切换全天聆听起停（通过 Activity/Service/Session 三条路径）
 - 若列表不显示：重启或重装；必要时用 Shizuku 执行 `settings put` 绑定 Android 默认助理
+
+## 音频输入输出（v0.11.0）
+- 设置 → 麦克风与音质：动态枚举系统输入/输出设备（显示原始 productName）
+- 输入：AudioRecord.setPreferredDevice 锚定具体设备；蓝牙通话麦走 SCO+VOICE_COMMUNICATION，其余 VOICE_RECOGNITION+clearCommunicationDevice（保 A2DP 音质）
+- 输出：MediaPlayer.setPreferredDevice（auto/扬声器/指定蓝牙耳机）
+- 切换即生效（ACTION_APPLY_AUDIO 重启采集线程）
 
 ## 通知栏控制
 - 设置 → 通知栏控制（二级菜单）
