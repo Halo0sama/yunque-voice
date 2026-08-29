@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="com.halo.yunquevoice.service.voice.MvpVoiceInteractionSessionService"
+    android:recognitionService="com.halo.yunquevoice.service.voice.MvpRecognitionService"
+    android:settingsActivity="com.halo.yunquevoice.ui.MainShellComposeActivity"
+    android:supportsAssist="true" />

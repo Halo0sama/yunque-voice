@@ -1,0 +1,21 @@
+<resources>
+    <color name="window_background">#FFFFFF</color>
+    <color name="lark_surface">#FAF8F3</color>
+    <color name="lark_surface_container_low">#F4F1EA</color>
+    <color name="lark_surface_container">#EEEADF</color>
+    <color name="lark_surface_container_high">#E8E3D7</color>
+    <color name="lark_surface_variant">#EDE6DC</color>
+    <color name="lark_on_surface">#211B17</color>
+    <color name="lark_on_surface_variant">#554840</color>
+    <color name="lark_primary">#AE4E2A</color>
+    <color name="icon_background">#245F52</color>
+    <color name="lark_on_primary">#FFFFFF</color>
+    <color name="lark_primary_container">#FFDBCC</color>
+    <color name="lark_on_primary_container">#5C1700</color>
+    <color name="lark_secondary">#7A5745</color>
+    <color name="lark_secondary_container">#FFDBCC</color>
+    <color name="lark_on_secondary_container">#2D1509</color>
+    <color name="lark_outline">#84736A</color>
+    <color name="lark_outline_variant">#D6C2B7</color>
+    <color name="lark_control_highlight">#1F000000</color>
+</resources>

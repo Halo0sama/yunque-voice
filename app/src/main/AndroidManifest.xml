@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <application
+        android:name=".YunqueApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="云雀·私人助理"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.YunqueVoice">
+
+        <activity
+            android:name=".ui.MainShellComposeActivity"
+            android:exported="true"
+            android:label="云雀·私人助理">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+
+
+        <activity
+            android:name=".ui.VoiceAssistantComposeActivity"
+            android:exported="true"
+            android:label="云雀·私人助理">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <action android:name="android.intent.action.VOICE_ASSIST" />
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <action android:name="com.miui.voicetrigger.ACTION_VOICE_TRIGGER_START_VOICEASSIST" />
+                <action android:name="com.xiaoai.ACTION_BLUETOOTH_START_VOICEASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.MyInfoComposeActivity"
+            android:exported="false"
+            android:label="我的信息" />
+
+
+
+
+
+
+        <activity
+            android:name=".ui.VoiceCloneComposeActivity"
+            android:exported="false"
+            android:label="自定义音色" />
+        <activity
+            android:name=".ui.WorldBookComposeActivity"
+            android:exported="false"
+            android:label="世界书" />
+        <activity
+            android:name=".ui.RoleCardComposeActivity"
+            android:exported="false"
+            android:label="角色卡" />
+        <activity
+            android:name=".ui.PersonProfileComposeActivity"
+            android:exported="false"
+            android:label="人物档案" />
+        <activity
+            android:name=".ui.VoiceManagerComposeActivity"
+            android:exported="false"
+            android:label="身边的人" />
+        <activity
+            android:name=".ui.AboutMeComposeActivity"
+            android:exported="false"
+            android:label="关于我" />
+        <!-- 标准 Android 语音助手接入 -->
+        <service
+            android:name=".service.voice.MvpVoiceInteractionService"
+            android:label="云雀·私人助理"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".service.voice.MvpVoiceInteractionSessionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true" />
+
+        <service
+            android:name=".service.voice.MvpRecognitionService"
+            android:label="云雀语音识别"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/voice_recognition" />
+        </service>
+
+        <!-- 小米蓝牙/语音触发唤起 -->
+        <service
+            android:name=".service.voice.MvpVoiceAssistantService"
+            android:label="云雀·私人助理"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.xiaoai.ACTION_BLUETOOTH_START_VOICEASSIST" />
+                <action android:name="com.miui.voicetrigger.ACTION_VOICE_TRIGGER_START_VOICEASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- 全天候持续聆听服务 -->
+        <service
+            android:name=".service.AlwaysOnListeningService"
+            android:exported="true"
+            android:foregroundServiceType="microphone" />
+    </application>
+</manifest>
