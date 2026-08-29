@@ -138,6 +138,11 @@ object BailianMemory {
     fun outboxSize(context: Context): Int =
         outboxFile(context).takeIf { it.exists() }?.readLines()?.count { it.isNotBlank() } ?: 0
 
+    /** 清空 outbox（记忆内容整体重置时用）。 */
+    fun clearOutbox(context: Context) {
+        synchronized(outboxLock) { outboxFile(context).delete() }
+    }
+
     /** 会话簇批量写入：一次调用带上整簇原话（计费按次，与条数无关，上限实测 ≥50 条）。 */
     suspend fun appendBatchReliably(context: Context, items: List<UploadItem>) {
         if (items.isEmpty()) return

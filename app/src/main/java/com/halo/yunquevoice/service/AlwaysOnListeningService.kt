@@ -71,6 +71,7 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_COMPACTION = "com.halo.yunquevoice.action.TEST_COMPACTION"
         const val ACTION_TEST_DIAR = "com.halo.yunquevoice.action.TEST_DIAR"
         const val ACTION_APPLY_AUDIO = "com.halo.yunquevoice.action.APPLY_AUDIO"
+        const val ACTION_TEST_WIPE = "com.halo.yunquevoice.action.TEST_WIPE"
 
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
@@ -204,6 +205,14 @@ class AlwaysOnListeningService : Service() {
                         VoiceMvpLog.i("DIAR", "测试分离完成：${texts.size} 句 / ${clusters.toSet().size} 簇")
                     }
                 }
+            }
+            ACTION_TEST_WIPE -> {
+                // 记忆内容整体重置：清对话时间线/工作记忆/关于我/关系/统计/漏听/outbox，
+                // 保留声纹档案、角色卡/世界书与全部设置。云端节点由外部脚本另行删除。
+                memoryDb.wipeMemoryContent()
+                Store.clearInterruptions(this)
+                BailianMemory.clearOutbox(this)
+                VoiceMvpLog.i("SERVICE", "记忆内容已全部清空（保留声纹与角色卡）")
             }
             ACTION_TEST_UPLOAD -> {
                 val key = Store.dashScopeKey(this)

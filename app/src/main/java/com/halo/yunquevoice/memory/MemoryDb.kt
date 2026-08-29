@@ -587,6 +587,16 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         writableDatabase.delete("memories", null, null)
     }
 
+    /** 全部记忆内容清空（保留声纹档案、角色卡/世界书、设置）：对话时间线、工作记忆、关于我、关系、统计。 */
+    fun wipeMemoryContent() {
+        listOf(
+            "conversations", "memories", "about_me", "relationships",
+            "graph_positions", "daily_stats", "session_state"
+        ).forEach { table ->
+            runCatching { writableDatabase.delete(table, null, null) }
+        }
+    }
+
     /* ─────────── about_me ─────────── */
 
     fun addAboutMe(content: String, source: String = "manual", speakerId: String? = null): Long {

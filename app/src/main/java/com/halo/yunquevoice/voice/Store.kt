@@ -301,4 +301,10 @@ object Store {
             }
         }.getOrElse { emptyList() }
     }
+
+    fun clearInterruptions(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            remove(KEY_INTERRUPTIONS)
+        }
+    }
 }
