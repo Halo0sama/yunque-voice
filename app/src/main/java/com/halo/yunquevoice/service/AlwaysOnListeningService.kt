@@ -20,7 +20,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import com.halo.yunquevoice.memory.ConversationRecord
-import com.halo.yunquevoice.memory.AboutMeExtractor
 import com.halo.yunquevoice.memory.MemoryDb
 import com.halo.yunquevoice.memory.RelationshipExtractor
 import com.halo.yunquevoice.memory.SpeakerEngine
@@ -208,12 +207,13 @@ class AlwaysOnListeningService : Service() {
                 }
             }
             ACTION_TEST_WIPE -> {
-                // 记忆内容整体重置：清对话时间线/工作记忆/关于我/关系/统计/漏听/outbox，
-                // 保留声纹档案、角色卡/世界书与全部设置。云端节点由外部脚本另行删除。
-                memoryDb.wipeMemoryContent()
+                // 记忆内容整体重置：清对话时间线/工作记忆/画像/关于我/关系/统计/漏听/outbox，
+                // extra speakers=true 时连声纹档案一起清。云端节点由外部脚本另行删除。
+                val withSpeakers = intent?.getBooleanExtra("speakers", false) ?: false
+                memoryDb.wipeMemoryContent(speakersToo = withSpeakers)
                 Store.clearInterruptions(this)
                 BailianMemory.clearOutbox(this)
-                VoiceMvpLog.i("SERVICE", "记忆内容已全部清空（保留声纹与角色卡）")
+                VoiceMvpLog.i("SERVICE", "记忆内容已全部清空（含声纹=$withSpeakers；角色卡与设置保留）")
             }
             ACTION_TEST_UPLOAD -> {
                 val key = Store.dashScopeKey(this)
@@ -636,7 +636,6 @@ class AlwaysOnListeningService : Service() {
             val key = Store.llmActiveKey(this)
             scope.launch {
                 RelationshipExtractor.extract(memoryDb, key)
-                AboutMeExtractor.extract(memoryDb, key)
             }
         }
         handleTranscriptText(text)
@@ -664,12 +663,13 @@ class AlwaysOnListeningService : Service() {
     }
 
     private fun buildMyInfo(): String {
-        val name = Store.myName(this)
         val voice = Store.myVoiceDesc(this)
-        return listOf(
+        val profile = memoryDb.loadProfileDoc().content
+        return listOfNotNull(
             "称呼：主人",
-            voice.takeIf { it.isNotBlank() }?.let { "声音：$it" }
-        ).filterNotNull().joinToString("；")
+            voice.takeIf { it.isNotBlank() }?.let { "声音：$it" },
+            profile.takeIf { it.isNotBlank() }?.let { "关于主人的画像：$it" }
+        ).joinToString("\n")
     }
 
     /* ───────────── 云端说话人分离回写 ───────────── */

@@ -391,8 +391,13 @@ object VoiceMvpClient {
                 .joinToString("\n") { "记忆中：${it.content}" }
         } else ""
         val summaryText = if (workingSummary.isBlank()) "" else "\n【近期对话摘要】\n$workingSummary\n"
+        val profileText = if (context != null) {
+            val p = MemoryDb(context).loadProfileDoc().content
+            if (p.isNotBlank()) "\n【关于主人的画像】\n$p\n" else ""
+        } else ""
         val system = "你是云雀。回答要简短、口语化，适合直接读出来；不要用 Markdown、列表或代码块，尽量控制在两三句话。" +
             "当用户询问时间、日期或电量时，请调用对应工具获取真实信息后再回答。" +
+            profileText +
             summaryText +
             (if (memoryText.isNotBlank()) "\n\n$memoryText\n" else "") +
             buildRoleContext(context, question)
@@ -416,19 +421,6 @@ object VoiceMvpClient {
         val content = completeWithTools(deepSeekKey, system, batch, null, "RELATION")
         return runCatching { JSONObject(content.trim()) }
             .getOrElse { JSONObject().put("names", JSONArray()).put("relations", JSONArray()) }
-    }
-
-    /** 从对话中提取“关于我”的长久信息：兴趣、性格、习惯、偏好等，无预设板块。 */
-    suspend fun extractAboutMe(deepSeekKey: String, batch: String): List<String> {
-        val system = "你是云雀。从对话中提取关于用户本人的、值得长期记住的信息：兴趣、性格、习惯、偏好、经历、关系等。" +
-            "不要预设分类，只输出 JSON 数组，每项是一句关于用户本人的事实。"
-        val content = completeWithTools(deepSeekKey, system, batch, null, "ABOUTME")
-        return runCatching {
-            val arr = JSONArray(content.trim())
-            (0 until arr.length()).map { arr.getString(it).trim() }
-        }.getOrElse {
-            if (content.isBlank()) emptyList() else listOf(content.trim())
-        }
     }
 
     /** 从一段对话批里提取值得长期记住的事实，返回记忆条目列表。 */

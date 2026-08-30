@@ -59,7 +59,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.halo.yunquevoice.memory.AboutMeExtractor
 import com.halo.yunquevoice.memory.MemoryDb
 import com.halo.yunquevoice.memory.SpeakerEngine
 import com.halo.yunquevoice.voice.Store
@@ -87,10 +86,10 @@ private fun AboutMeScreen() {
     var name by remember { mutableStateOf(Store.myName(context)) }
     var speakerId by remember { mutableStateOf(Store.mySpeakerId(context)) }
     var speakerList by remember { mutableStateOf(db.getSpeakers()) }
-    var addText by remember { mutableStateOf("") }
-    var addDialog by remember { mutableStateOf(false) }
-    var deleteAboutTarget by remember { mutableStateOf<Long?>(null) }
-    var list by remember { mutableStateOf(db.listAboutMe()) }
+    val profileDoc = remember { db.loadProfileDoc() }
+    var profile by remember { mutableStateOf(profileDoc.content) }
+    var profileBudget by remember { mutableStateOf(profileDoc.budget) }
+    var profileSavedTick by remember { mutableStateOf(0) }
     var recordStatus by remember { mutableStateOf("") }
     var recording by remember { mutableStateOf(false) }
     var hasVoice by remember { mutableStateOf(speakerId.isNotBlank()) }
@@ -179,84 +178,45 @@ private fun AboutMeScreen() {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(Modifier.padding(16.dp)) {
-                if (list.isEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "云雀还没有关于你的记录",
-                            modifier = Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        IconButton(
-                            onClick = { addText = ""; addDialog = true },
-                            modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp))
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "添加")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Text("关于我 · 画像文档", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+                    Text(
+                        "${profile.length}/$profileBudget 字",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "云雀每晚从对话中自动维护这份画像（合并重复、消解矛盾、丢弃琐事）；你也可以直接编辑，它决定云雀有多懂你。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = profile,
+                    onValueChange = { profile = it },
+                    modifier = Modifier.fillMaxWidth().height(300.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (profileSavedTick > 0) "已保存" else "",
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(
+                        onClick = {
+                            val content = profile.trim()
+                            db.saveProfileDoc(content, profileBudget)
+                            profile = content
+                            profileSavedTick++
                         }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-                    ) {
-                        Text("关于我记录", fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                        IconButton(
-                            onClick = { addText = ""; addDialog = true },
-                            modifier = Modifier.size(48.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp))
-                        ) {
-                            Icon(Icons.Filled.Add, contentDescription = "添加")
-                        }
-                    }
-                    list.forEach { item ->
-                        YunqueGlassCard(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Row(Modifier.padding(12.dp)) {
-                                Text(
-                                    "[${if (item.source == "ai") "AI" else "手动"}] ${item.content}",
-                                    modifier = Modifier.weight(1f)
-                                )
-                                TextButton(onClick = { deleteAboutTarget = item.id }) { Text("删除") }
-                            }
-                        }
-                    }
+                    ) { Text("保存") }
                 }
             }
-        }
-
-        deleteAboutTarget?.let { id ->
-            ConfirmDeleteDialog(
-                text = "确定删除这条关于我的记录吗？",
-                onConfirm = {
-                    db.deleteAboutMe(id)
-                    list = db.listAboutMe()
-                    deleteAboutTarget = null
-                },
-                onDismiss = { deleteAboutTarget = null }
-            )
-        }
-
-        if (addDialog) {
-            AlertDialog(
-                onDismissRequest = { addDialog = false },
-                title = { Text("手动添加关于我") },
-                text = {
-                    OutlinedTextField(value = addText, onValueChange = { addText = it }, modifier = Modifier.fillMaxWidth())
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        if (addText.isNotBlank()) {
-                            db.addAboutMe(addText.trim(), "manual")
-                            list = db.listAboutMe()
-                        }
-                        addDialog = false
-                    }) { Text("添加") }
-                },
-                dismissButton = { TextButton(onClick = { addDialog = false }) { Text("取消") } }
-            )
         }
     }
 

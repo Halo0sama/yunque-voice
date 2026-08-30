@@ -89,7 +89,7 @@ data class WorldEntry(
     var position: String
 )
 
-class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db", null, 9) {
+class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db", null, 10) {
 
     private var defaultsChecked = false
 
@@ -129,6 +129,7 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         createRoleCards(db)
         createSessionState(db)
         createDailyStats(db)
+        createProfileDoc(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -159,6 +160,9 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
             createSessionState(db)
             createDailyStats(db)
         }
+        if (oldVersion < 10) {
+            createProfileDoc(db)
+        }
     }
 
     private fun createSessionState(db: SQLiteDatabase) {
@@ -175,6 +179,37 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
             "CREATE TABLE IF NOT EXISTS daily_stats (" +
                 "date TEXT PRIMARY KEY, stats TEXT, updated_at INTEGER)"
         )
+    }
+
+    private fun createProfileDoc(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS profile_doc (" +
+                "id INTEGER PRIMARY KEY CHECK (id = 1), " +
+                "content TEXT DEFAULT '', budget INTEGER DEFAULT 800, updated_at INTEGER DEFAULT 0)"
+        )
+    }
+
+    /* ─────────── 用户画像文档（关于我） ─────────── */
+
+    data class ProfileDoc(val content: String, val budget: Int)
+
+    fun loadProfileDoc(): ProfileDoc {
+        readableDatabase.query("profile_doc", null, "id = 1", null, null, null, null).use { c ->
+            if (c.moveToFirst()) {
+                return ProfileDoc(content = c.getString(1) ?: "", budget = c.getInt(2))
+            }
+        }
+        return ProfileDoc("", 800)
+    }
+
+    fun saveProfileDoc(content: String, budget: Int) {
+        val values = ContentValues().apply {
+            put("id", 1)
+            put("content", content)
+            put("budget", budget)
+            put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertWithOnConflict("profile_doc", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     /* ─────────── 工作记忆（会话状态） ─────────── */
@@ -587,13 +622,16 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         writableDatabase.delete("memories", null, null)
     }
 
-    /** 全部记忆内容清空（保留声纹档案、角色卡/世界书、设置）：对话时间线、工作记忆、关于我、关系、统计。 */
-    fun wipeMemoryContent() {
+    /** 全部记忆内容清空（保留声纹档案、角色卡/世界书、设置）：对话时间线、工作记忆、画像、关于我、关系、统计。 */
+    fun wipeMemoryContent(speakersToo: Boolean = false) {
         listOf(
             "conversations", "memories", "about_me", "relationships",
-            "graph_positions", "daily_stats", "session_state"
+            "graph_positions", "daily_stats", "session_state", "profile_doc"
         ).forEach { table ->
             runCatching { writableDatabase.delete(table, null, null) }
+        }
+        if (speakersToo) {
+            writableDatabase.delete("speakers", null, null)
         }
     }
 

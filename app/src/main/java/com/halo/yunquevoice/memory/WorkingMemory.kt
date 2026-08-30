@@ -26,6 +26,9 @@ object WorkingMemory {
     private const val VERBATIM_MAX_CHARS = 24_000        // 约 16K token，正常两天远到不了
     private const val SUMMARY_MAX_CHARS = 4_000          // 约 2.5K token
     private const val COMPACTION_INPUT_MAX_CHARS = 60_000
+    const val PROFILE_BUDGET_BASE = 800                  // 画像初始预算（字）
+    const val PROFILE_BUDGET_MAX = 2000                  // 画像硬顶（字），压缩自适应扩容不可越过
+    const val PROFILE_MAX_CHARS = 2_600                  // 画像硬截断（略高于预算上限）
     const val FUSE_TOKENS = 24_000                       // 保险丝：窗口估算 token 超过就提前压缩
 
     data class WorkingContext(
@@ -74,7 +77,8 @@ object WorkingMemory {
     fun overFuse(ctx: WorkingContext): Boolean = ctx.estTokens() > FUSE_TOKENS
 
     /**
-     * 压缩：把 [summarizedUntil, now-24h] 的旧原话折进滚动摘要，新事实上传记忆库。
+     * 压缩：把 [summarizedUntil, now-cutoffHours] 的旧原话折叠，一次 LLM 调用产出三个产物：
+     * 1) 新工作记忆摘要 2) 更新后的用户画像文档（预算自适应） 3) 值得进云端记忆库的新事实
      * 由惰性触发（跨天第一句）或保险丝触发。并发由调用方保证。
      */
     suspend fun compact(
@@ -103,10 +107,18 @@ object WorkingMemory {
             if (transcript.length > COMPACTION_INPUT_MAX_CHARS) break
         }
         val oldSummary = state.summary.ifBlank { "（无）" }
-        val system = "你是云雀的记忆压缩器。输入是一份旧的对话摘要和一段时间内的新对话原话。" +
-            "输出严格的 JSON：{\"summary\":\"合并后的新摘要，不超过600字，保留人物、关系、事实、计划和未尽事项，按主题组织\"," +
-            "\"facts\":[\"值得长期记住的独立事实，每条一句话，没有就给空数组\"]}。只输出 JSON。"
-        val user = "【旧摘要】\n$oldSummary\n\n【新对话原话】\n$transcript"
+        val profile = db.loadProfileDoc()
+        val profileText = profile.content.ifBlank { "（空，尚无画像）" }
+        val system = "你是云雀的记忆压缩器。输入包含：旧的工作摘要、旧的用户画像、一段时间内的新对话原话。" +
+            "输出严格的 JSON：\n" +
+            "{\"summary\":\"合并后的新工作摘要，不超过500字，按主题组织最近发生的事\",\n" +
+            "\"profile\":\"更新后的用户画像。规则：只保留跨时间复用的用户特质（身份、关系、偏好、习惯、性格、经历），" +
+            "合并重复、消解矛盾（以更新近的为准）、丢弃当天琐事等瞬态内容；" +
+            "当前预算 ${profile.budget} 字，若确有无法合并的新维度可扩容至多20%，并在 profile_budget 给出新预算，硬上限 $PROFILE_BUDGET_MAX\",\n" +
+            "\"facts\":[\"值得写入长期记忆库的独立事实，不含画像已覆盖的内容，没有则空数组\"],\n" +
+            "\"profile_budget\":数字}\n" +
+            "只输出 JSON，不要输出其他任何内容。"
+        val user = "【旧工作摘要】\n$oldSummary\n\n【旧用户画像】\n$profileText\n\n【新对话原话】\n$transcript"
         val content = runCatching {
             VoiceMvpClient.completeRaw(deepSeekKey, system, user, "COMPACTION", Store.llmProvider(context))
         }.getOrElse {
@@ -121,10 +133,21 @@ object WorkingMemory {
                 return false
             }
         val newSummary = parsed.optString("summary", "").take(SUMMARY_MAX_CHARS)
+        val newProfile = parsed.optString("profile", "").trim().take(PROFILE_MAX_CHARS)
         val facts = mutableListOf<String>()
         val factArr = parsed.optJSONArray("facts") ?: JSONArray()
         for (i in 0 until factArr.length()) {
             factArr.optString(i).takeIf { it.isNotBlank() }?.let { facts.add(it.trim()) }
+        }
+        // 预算自适应：模型可在当前预算上扩 ≤20%，硬顶 PROFILE_BUDGET_MAX；只涨不缩（缩由压缩的取舍天然完成）
+        val requestedBudget = parsed.optInt("profile_budget", profile.budget)
+        val maxAllowed = minOf(
+            PROFILE_BUDGET_MAX,
+            maxOf(profile.budget, (profile.budget * 120) / 100, PROFILE_BUDGET_BASE)
+        )
+        val newBudget = requestedBudget.coerceIn(profile.budget, maxAllowed)
+        if (newProfile.isNotBlank()) {
+            db.saveProfileDoc(newProfile, newBudget)
         }
         val lastTs = oldTurns.maxOfOrNull { it.ts } ?: state.summarizedUntilTs
         db.saveSessionState(
@@ -139,7 +162,7 @@ object WorkingMemory {
         stat(db, "compaction_facts", facts.size.toDouble())
         VoiceMvpLog.i(
             "WORKMEM",
-            "压缩完成($reason)：折叠 ${oldTurns.size} 句，摘要 ${newSummary.length} 字，新事实 ${facts.size} 条"
+            "压缩完成($reason)：折叠 ${oldTurns.size} 句，摘要 ${newSummary.length} 字，画像 ${newProfile.length}/${newBudget} 字，新事实 ${facts.size} 条"
         )
         if (facts.isNotEmpty()) {
             runCatching { BailianMemory.addFacts(context, facts) }
