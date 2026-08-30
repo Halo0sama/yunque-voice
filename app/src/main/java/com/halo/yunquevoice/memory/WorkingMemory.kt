@@ -45,10 +45,12 @@ object WorkingMemory {
         runCatching { db.statAdd(today(), key, delta) }
     }
 
-    /** 决策用的工作上下文：摘要 + 原话窗口（含云雀自己的回复），全部从 DB 重建。 */
+    /** 决策用的工作上下文：摘要 + 原话窗口（含云雀自己的回复），全部从 DB 重建。
+     *  窗口起点只由压缩推进（追加式）：前端稳定是 DeepSeek 前缀缓存高命中的前提，
+     *  滑动 48h 窗口会每小时打破一次缓存前缀（v0.12.0 修复）。 */
     fun buildContext(db: MemoryDb): WorkingContext {
         val state = db.loadSessionState()
-        val windowStart = maxOf(state.summarizedUntilTs, System.currentTimeMillis() - VERBATIM_WINDOW_MS)
+        val windowStart = state.summarizedUntilTs
         val turns = db.conversationsBetween(windowStart, System.currentTimeMillis() + 60_000, VERBATIM_MAX_TURNS)
         val lines = mutableListOf<String>()
         var chars = 0

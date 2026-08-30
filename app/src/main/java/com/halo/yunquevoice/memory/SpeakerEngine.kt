@@ -14,7 +14,8 @@ import kotlin.math.sqrt
  */
 object SpeakerEngine {
 
-    private const val MATCH_COSINE = 0.82
+    // 0.82 在嘈杂多人环境会把陌生人全并进来（身份坍缩），宁滥拆不误并：错拆可手动合并，错并不可逆
+    private const val MATCH_COSINE = 0.93
     private const val FEATURE_DIM = 6
 
     fun recognize(db: MemoryDb, pcm: ByteArray): SpeakerProfile {
@@ -32,11 +33,15 @@ object SpeakerEngine {
             }
         }
         if (best != null && bestScore >= MATCH_COSINE) {
-            val merged = blend(existingFeature(best!!), feature)
+            val a = existingFeature(best!!)
+            // 增量均值更新：档案越成熟，单个新样本的权重越小，防止特征漂移成"通用嗓音"
+            val n = best.sampleCount.coerceAtLeast(1)
+            val w = 1.0 / (n + 1)
+            val merged = DoubleArray(a.size) { a[it] * (1 - w) + feature[it] * w }
             val updated = best!!.copy(
                 feature = encodeFeature(merged),
                 updatedAt = System.currentTimeMillis(),
-                sampleCount = best!!.sampleCount + 1
+                sampleCount = n + 1
             )
             db.upsertSpeaker(updated)
             return updated

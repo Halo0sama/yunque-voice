@@ -110,6 +110,7 @@ class AlwaysOnListeningService : Service() {
 
     @Volatile private var compacting = false
     @Volatile private var noiseFloor = 500.0
+    @Volatile private var retrievalMissStreak = 0
     @Volatile private var diarizationRunning = false
     @Volatile private var inSpeech = false
     @Volatile private var silenceMs = 0L
@@ -788,20 +789,26 @@ class AlwaysOnListeningService : Service() {
         val mode = Store.listenMode(this)
         val decideStart = System.currentTimeMillis()
         val reply = runCatching {
-            val memories = if (Store.cloudMemoryEnabled(this)) {
-                runCatching { BailianMemory.search(this, text).map { it.content } }
-                    .onSuccess {
+            // 空库退避：连续 20 次检索脱靶后，每 50 次决策才探测一次（记忆入库有提炼时延，避免全天空转）
+            val skipRetrieval = retrievalMissStreak >= 20 && retrievalMissStreak % 50 != 0
+            val memories = when {
+                !Store.cloudMemoryEnabled(this) -> emptyList()
+                skipRetrieval -> {
+                    retrievalMissStreak++
+                    emptyList()
+                }
+                else -> runCatching { BailianMemory.search(this, text).map { it.content } }
+                    .onSuccess { list ->
+                        retrievalMissStreak = if (list.isEmpty()) retrievalMissStreak + 1 else 0
                         WorkingMemory.stat(memoryDb, "retrieval_calls")
-                        WorkingMemory.stat(memoryDb, "retrieval_hits", it.size.toDouble())
-                        if (it.isEmpty()) WorkingMemory.stat(memoryDb, "retrieval_miss")
+                        WorkingMemory.stat(memoryDb, "retrieval_hits", list.size.toDouble())
+                        if (list.isEmpty()) WorkingMemory.stat(memoryDb, "retrieval_miss")
                     }
                     .getOrElse {
                         WorkingMemory.stat(memoryDb, "retrieval_fail")
                         VoiceMvpLog.w("BAILIAN", "记忆检索失败，本次无记忆上下文: ${it.message}")
                         emptyList()
                     }
-            } else {
-                emptyList()
             }
             VoiceMvpClient.decide(
                 deepKey, mode, text, working.verbatimLines, this,
