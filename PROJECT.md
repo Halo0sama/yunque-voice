@@ -20,7 +20,7 @@
 - ffmpeg-kit（`dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7`）
 - LiquidGlass（`io.github.nadeemiqbal:liquid-glass:0.2.3`）
 - 对话模型三家可切（v0.11.0）：DeepSeek deepseek-v4-flash / 智谱 glm-5.3-flash / 阿里 qwen3.8-flash，Key 各自保存一键切换（`Store.llmKey/provider`）
-- 思考模式（实测）：deepseek `thinking.type=disabled` 可关；qwen `enable_thinking=false` 可关；智谱常思考仅 depth 分档 → 实时路径统一"关或最浅"，压缩/提炼用各家默认
+- 思考模式（实测）：deepseek `thinking.type=disabled` 可关；qwen `enable_thinking=false` 可关；智谱常思考仅 depth 分档（low/high/max）→ 实时路径统一"关或最浅"；**夜间压缩 thinkingMax**：deepseek/qwen 显式开启、智谱 depth=max（质量优先）
 
 ## 构建与安装
 ```bash

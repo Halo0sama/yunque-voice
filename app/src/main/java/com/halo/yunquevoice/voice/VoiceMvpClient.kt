@@ -352,8 +352,16 @@ object VoiceMvpClient {
         return sb.toString()
     }
 
-    /** 不带工具的原始补全：供压缩/提炼等结构化任务使用。 */
-    suspend fun completeRaw(deepSeekKey: String, system: String, user: String, label: String, provider: String = Store.LLM_DEEPSEEK): String =
+    /** 不带工具的原始补全：供压缩/提炼等结构化任务使用。
+     *  thinkingMax=true 时按供应商开到最深思考（夜间压缩等质量优先任务用）。 */
+    suspend fun completeRaw(
+        deepSeekKey: String,
+        system: String,
+        user: String,
+        label: String,
+        provider: String = Store.LLM_DEEPSEEK,
+        thinkingMax: Boolean = false
+    ): String =
         withContext(Dispatchers.IO) {
             val messages = JSONArray()
                 .put(JSONObject().put("role", "system").put("content", system))
@@ -364,6 +372,13 @@ object VoiceMvpClient {
                 .put("temperature", 0.2)
                 .put("max_tokens", 2000)
                 .put("messages", messages)
+            if (thinkingMax) {
+                when (provider) {
+                    Store.LLM_ZHIPU -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "max"))
+                    Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "enabled"))
+                    Store.LLM_QWEN -> body.put("enable_thinking", true)
+                }
+            }
             val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val content = resp.getJSONArray("choices")
                 .getJSONObject(0)

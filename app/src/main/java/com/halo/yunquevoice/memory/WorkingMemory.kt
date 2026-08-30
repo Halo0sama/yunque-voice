@@ -120,7 +120,8 @@ object WorkingMemory {
             "只输出 JSON，不要输出其他任何内容。"
         val user = "【旧工作摘要】\n$oldSummary\n\n【旧用户画像】\n$profileText\n\n【新对话原话】\n$transcript"
         val content = runCatching {
-            VoiceMvpClient.completeRaw(deepSeekKey, system, user, "COMPACTION", Store.llmProvider(context))
+            // 夜间压缩是质量优先任务：思考开到最深（智谱 max / DeepSeek·Qwen 显式开启）
+            VoiceMvpClient.completeRaw(deepSeekKey, system, user, "COMPACTION", Store.llmProvider(context), thinkingMax = true)
         }.getOrElse {
             VoiceMvpLog.w("WORKMEM", "压缩调用失败($reason): ${it.message}")
             stat(db, "compaction_fail")
