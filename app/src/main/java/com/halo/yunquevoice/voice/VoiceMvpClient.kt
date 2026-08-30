@@ -374,8 +374,13 @@ object VoiceMvpClient {
                 .put("messages", messages)
             if (thinkingMax) {
                 when (provider) {
-                    // deepseek 与智谱同构：depth 支持 low/high/max（实测）
-                    Store.LLM_ZHIPU, Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "max"))
+                    // DeepSeek 官方：强度参数是顶层 reasoning_effort（low/high/max，默认 high），
+                    // thinking 内没有 depth 字段（传了会被静默忽略）；智谱用 thinking.depth=max
+                    Store.LLM_DEEPSEEK -> {
+                        body.put("thinking", JSONObject().put("type", "enabled"))
+                        body.put("reasoning_effort", "max")
+                    }
+                    Store.LLM_ZHIPU -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "max"))
                     Store.LLM_QWEN -> body.put("enable_thinking", true)
                 }
             }
