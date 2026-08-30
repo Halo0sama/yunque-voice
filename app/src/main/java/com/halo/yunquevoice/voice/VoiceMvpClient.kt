@@ -374,8 +374,8 @@ object VoiceMvpClient {
                 .put("messages", messages)
             if (thinkingMax) {
                 when (provider) {
-                    Store.LLM_ZHIPU -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "max"))
-                    Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "enabled"))
+                    // deepseek 与智谱同构：depth 支持 low/high/max（实测）
+                    Store.LLM_ZHIPU, Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "max"))
                     Store.LLM_QWEN -> body.put("enable_thinking", true)
                 }
             }
