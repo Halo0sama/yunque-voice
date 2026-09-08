@@ -212,6 +212,11 @@ class MemoryDb(context: Context) : SQLiteOpenHelper(context, "yunque_memory.db",
         writableDatabase.insertWithOnConflict("profile_doc", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /** 导出前调用：把 WAL 合回主文件，保证复制的 DB 完整。 */
+    fun walCheckpoint() {
+        writableDatabase.execSQL("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
     /* ─────────── 工作记忆（会话状态） ─────────── */
 
     data class SessionState(

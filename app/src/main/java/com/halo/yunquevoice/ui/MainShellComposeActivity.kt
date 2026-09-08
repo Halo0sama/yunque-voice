@@ -960,6 +960,20 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("通知栏控制") { showNotifSheet = true }
     QuickNav("仅聆听与对话") { showListenSheet = true }
     QuickNav("麦克风与音质") { showAudioSheet = true }
+    QuickNav("每日数据导出") {
+        if (android.os.Environment.isExternalStorageManager()) {
+            android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
+        } else {
+            runCatching {
+                context.startActivity(android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    android.net.Uri.parse("package:" + context.packageName)))
+            }.onFailure {
+                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+            android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
     if (showAudioSheet) {
         val am = context.getSystemService(android.media.AudioManager::class.java)
         var inSel by remember { mutableStateOf(Store.audioInputDevice(context)) }

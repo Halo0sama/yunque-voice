@@ -29,6 +29,7 @@ import com.halo.yunquevoice.ui.MainShellComposeActivity
 import com.halo.yunquevoice.voice.BailianMemory
 import com.halo.yunquevoice.voice.MemoryUploader
 import com.halo.yunquevoice.voice.DashScopeFiletrans
+import com.halo.yunquevoice.voice.DailyExporter
 import com.halo.yunquevoice.voice.DiarizedSentence
 import com.halo.yunquevoice.voice.DashScopeUpload
 import com.halo.yunquevoice.voice.InterruptionRecord
@@ -143,6 +144,7 @@ class AlwaysOnListeningService : Service() {
                     val deepKey = Store.llmActiveKey(this@AlwaysOnListeningService)
                     runCatching {
                         WorkingMemory.compact(this@AlwaysOnListeningService, memoryDb, deepKey, "手动", cutoffHours)
+                    DailyExporter.exportDaily(this@AlwaysOnListeningService, memoryDb)
                     }
                     VoiceMvpLog.i("WORKMEM", "手动压缩触发完成")
                 }
@@ -657,6 +659,8 @@ class AlwaysOnListeningService : Service() {
             val deepKey = Store.llmActiveKey(this)
             if (deepKey.isBlank()) return
             WorkingMemory.compact(this, db, deepKey, if (overFuse) "保险丝" else "每日")
+            // 每日原始数据导出：夸克同步上云 → Mac 定时任务消费分析
+            DailyExporter.exportDaily(this, db)
         } finally {
             compacting = false
         }
