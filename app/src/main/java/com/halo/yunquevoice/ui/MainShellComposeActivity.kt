@@ -950,6 +950,7 @@ private fun SettingsScreen(context: android.content.Context) {
     var showListenSheet by remember { mutableStateOf(false) }
     var textReply by remember { mutableStateOf(Store.listenOnlyTextReply(context)) }
     var showAudioSheet by remember { mutableStateOf(false) }
+    var showKeepAliveSheet by remember { mutableStateOf(false) }
     var audioSelTick by remember { mutableStateOf(0) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -960,6 +961,7 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("通知栏控制") { showNotifSheet = true }
     QuickNav("仅聆听与对话") { showListenSheet = true }
     QuickNav("麦克风与音质") { showAudioSheet = true }
+    QuickNav("后台保活指引") { showKeepAliveSheet = true }
     QuickNav("每日数据导出") {
         if (android.os.Environment.isExternalStorageManager()) {
             android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
@@ -972,6 +974,48 @@ private fun SettingsScreen(context: android.content.Context) {
                 context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
             android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+    if (showKeepAliveSheet) {
+        val isXiaomi = remember { android.os.Build.MANUFACTURER.contains("Xiaomi", true) || android.os.Build.MANUFACTURER.contains("Redmi", true) }
+        val ctx = LocalContext.current
+        var whitelist by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            whitelist = runCatching {
+                androidx.core.content.ContextCompat.getSystemService(ctx, android.os.PowerManager::class.java)
+                    ?.isIgnoringBatteryOptimizations(ctx.packageName) ?: false
+            }.getOrDefault(false)
+        }
+        YunqueBottomSheet(onDismiss = { showKeepAliveSheet = false }) {
+            Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+                Text("后台保活指引", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    (if (isXiaomi) "你的设备是小米/红米，系统对后台较激进。请完成以下三步（每步一次即可）：\n\n" +
+                        "1. 省电策略：设置 → 应用设置 → 应用管理 → 云雀 → 省电策略 → 选\"无限制\"\n" +
+                        "2. 自启动：同一页面 → 打开\"自启动\"开关（被杀后自动恢复聆听依赖它）\n" +
+                        "3. 后台锁定：最近任务里长按云雀卡片 → 锁定\n\n"
+                        else "请允许云雀忽略电池优化（设置 → 应用 → 云雀 → 电池 → 不受限制）。\n\n") +
+                        "代码层保障：服务被系统杀死后会自动重启并恢复聆听，无需手动干预。\n" +
+                        "电池优化白名单状态：",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    if (whitelist) "✓ 已在电池优化白名单" else "✗ 不在电池优化白名单",
+                    color = if (whitelist) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                TextButton(onClick = {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }, modifier = Modifier.fillMaxWidth()) { Text("打开电池优化设置") }
+                if (isXiaomi) {
+                    TextButton(onClick = {
+                        runCatching { ctx.startActivity(android.content.Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                            putExtra("extra_pkgname", ctx.packageName)
+                        }) }.onFailure {
+                            runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + ctx.packageName))) }
+                        }
+                    }, modifier = Modifier.fillMaxWidth()) { Text("打开云雀应用信息（省电策略/自启动）") }
+                }
+            }
         }
     }
     if (showAudioSheet) {

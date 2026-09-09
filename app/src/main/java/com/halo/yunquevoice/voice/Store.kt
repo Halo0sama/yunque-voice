@@ -32,6 +32,17 @@ object Store {
     private const val KEY_AUDIO_INPUT = "audio_input"
     private const val KEY_AUDIO_INPUT_DEVICE = "audio_input_device"
     private const val KEY_AUDIO_OUTPUT = "audio_output"
+    private const val KEY_LISTENING_WAS_RUNNING = "listening_was_running"
+
+    /** 聆听是否应当处于运行状态（用于 START_STICKY 重启后自动恢复）。 */
+    fun listeningWasRunning(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_LISTENING_WAS_RUNNING, false)
+
+    fun saveListeningWasRunning(context: Context, running: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putBoolean(KEY_LISTENING_WAS_RUNNING, running)
+        }
+    }
 
     const val AUDIO_PHONE = "phone"
     const val AUDIO_EARPHONE = "earphone"

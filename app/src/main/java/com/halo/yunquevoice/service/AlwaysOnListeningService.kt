@@ -126,8 +126,24 @@ class AlwaysOnListeningService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         VoiceMvpLog.init(this)
-        when (intent?.action) {
+        // START_STICKY 重启：intent 为 null。若之前在聆听，自动恢复前台与采集，
+        // 否则激进后台管控（小米等）杀进程后服务只会空跑，聆听等于停了。
+        if (intent == null || intent.action == null) {
+            if (Store.listeningWasRunning(this) && !capturing) {
+                VoiceMvpLog.i("SERVICE", "系统重启了被杀的服务：自动恢复聆听")
+                startAsForeground()
+                startCapture()
+                YunqueApiServer.start(this)
+                scope.launch { runCatching { BailianMemory.flushOutbox(this@AlwaysOnListeningService) } }
+                broadcastStatus("listening")
+            } else if (!Store.listeningWasRunning(this)) {
+                stopSelf()
+            }
+            return START_STICKY
+        }
+        when (intent.action) {
             ACTION_START -> {
+                Store.saveListeningWasRunning(this, true)
                 if (!capturing) SoundCue.playStart()
                 startAsForeground()
                 startCapture()
@@ -150,6 +166,7 @@ class AlwaysOnListeningService : Service() {
                 }
             }
             ACTION_STOP -> {
+                Store.saveListeningWasRunning(this, false)
                 SoundCue.playStop()
                 YunqueApiServer.stop()
                 stopEverything()
