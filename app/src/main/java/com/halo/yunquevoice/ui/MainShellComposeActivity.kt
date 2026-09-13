@@ -121,6 +121,7 @@ import io.github.nadeemiqbal.liquidglass.GlassCard
 import io.github.nadeemiqbal.liquidglass.GlassNavBar
 import io.github.nadeemiqbal.liquidglass.liquidGlass
 import io.github.nadeemiqbal.liquidglass.rememberLiquidGlassState
+import com.halo.yunquevoice.BuildConfig
 import com.halo.yunquevoice.memory.ConversationRecord
 import com.halo.yunquevoice.memory.MemoryDb
 import com.halo.yunquevoice.memory.RelationshipRecord
@@ -259,6 +260,56 @@ private fun YunqueMaterialTheme(content: @Composable () -> Unit) {
 @Composable
 private fun AppShell() {
     val context = LocalContext.current
+    // 启动后台检查 GitHub Releases 更新，有新版弹窗（本次会话只提醒一次）
+    var updateInfo by remember { mutableStateOf<com.halo.yunquevoice.voice.UpdateChecker.UpdateInfo?>(null) }
+    var downloading by remember { mutableStateOf(false) }
+    var downloadMsg by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.halo.yunquevoice.voice.UpdateChecker.check(BuildConfig.VERSION_NAME)
+        }?.let { updateInfo = it }
+    }
+    updateInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { updateInfo = null },
+            title = { Text("发现新版本 ${info.tag}") },
+            text = {
+                Column {
+                    Text(info.notes.take(300).ifBlank { "夜间自动优化与修复。" })
+                    Text(
+                        "APK 大小：${"%.1f".format(info.apkSize / 1048576.0)} MB",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (downloading) Text(downloadMsg, color = MaterialTheme.colorScheme.primary)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !downloading, onClick = {
+                    downloading = true
+                    downloadMsg = "正在下载…"
+                    kotlinx.coroutines.MainScope().launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val f = com.halo.yunquevoice.voice.UpdateChecker.download(context, info.apkUrl)
+                        downloading = false
+                        if (f == null) {
+                            downloadMsg = "下载失败，可稍后重试或到 GitHub 手动下载"
+                            return@launch
+                        }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context, context.packageName + ".fileprovider", f)
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.onFailure { downloadMsg = "已下载，拉起安装失败：${it.message}" }
+                    }
+                }) { Text(if (downloading) "下载中…" else "下载并安装") }
+            },
+            dismissButton = { TextButton(onClick = { updateInfo = null }) { Text("下次再说") } }
+        )
+    }
     val openChat = (context as? android.app.Activity)?.intent?.getStringExtra("open_tab") == "chat"
     // remember 必须保留：否则每次 recompose 都会重建 state，把通知跳转设置的 tab 打回首页
     var tab by remember { mutableStateOf(if (openChat) ShellTab.Chat else ShellTab.Home) }
