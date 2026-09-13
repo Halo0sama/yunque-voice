@@ -1003,7 +1003,6 @@ class AlwaysOnListeningService : Service() {
     /* ───────────── 工具 ───────────── */
 
     private fun stopEverything() {
-        MemoryUploader.flush()
         notificationManager?.cancel(NOTIF_INTERRUPT_ID)
         stopCapture()
         interruptPlaybackSilently()

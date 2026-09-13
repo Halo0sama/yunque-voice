@@ -208,12 +208,24 @@ object BailianMemory {
         }
     }
 
-    /** 重发 outbox 里的欠账；仍失败的留下，其余清空。 */
+    @Volatile private var flushInFlight = false
+
+    /** 重发 outbox 里的欠账；仍失败的留下，其余清空。并发互斥：ACTION_START 与链式冲刷会同时触发。 */
     suspend fun flushOutbox(context: Context) = withContext(Dispatchers.IO) {
+        if (flushInFlight) return@withContext
+        flushInFlight = true
+        try {
+        flushOutboxLocked(context)
+        } finally {
+            flushInFlight = false
+        }
+    }
+
+    private suspend fun flushOutboxLocked(context: Context) {
         val f = outboxFile(context)
-        if (!f.exists()) return@withContext
+        if (!f.exists()) return
         val lines = synchronized(outboxLock) { f.readLines().filter { it.isNotBlank() } }
-        if (lines.isEmpty()) return@withContext
+        if (lines.isEmpty()) return
         VoiceMvpLog.i("BAILIAN", "冲刷 outbox ${lines.size} 条")
         val failed = mutableListOf<String>()
         for (line in lines) {

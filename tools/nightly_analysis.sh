@@ -5,7 +5,7 @@
 
 set -u
 SYNC_ROOT="/Volumes/dav/quark/mac/云雀语音"
-IN_DIR="$SYNC_ROOT/phone_sync"
+IN_DIR="/Volumes/dav/quark/我的备份/来自：REDMI K90 Pro Max手机备份/文件夹备份/Download/yunque_export"
 REPORT_DIR="$SYNC_ROOT/reports"
 LOG="$SYNC_ROOT/analysis.log"
 DAY=$(date +%Y-%m-%d)
@@ -52,9 +52,10 @@ echo "# 云雀分析日报 $DAY"
 echo
 echo "数据来源：$(basename "$LATEST_TAR")"
 echo
-STATS=$(sqlite3 "$DB" "SELECT stats FROM daily_stats WHERE date='$DAY';" 2>/dev/null)
+ANALYZE_DAY=$(sqlite3 "$DB" "SELECT MAX(date) FROM daily_stats;" 2>/dev/null)
+STATS=$(sqlite3 "$DB" "SELECT stats FROM daily_stats WHERE date='$ANALYZE_DAY';" 2>/dev/null)
 if [ -n "$STATS" ]; then
-    echo "## 今日运行指标"
+    echo "## 运行指标（${ANALYZE_DAY}）"
     echo '```'
     echo "$STATS" | python3 -c "
 import json, sys
@@ -97,7 +98,7 @@ if [ "${TOTAL3D:-0}" -gt 50 ] && [ "${TOP:-0}" -gt $((TOTAL3D * 95 / 100)) ]; th
     echo "- ⚠️ **声纹坍缩征兆**：近3天 $TOTAL3D 句中 $TOP 句归同一人（>95%）。若实际接触过多人，请检查\"身边的人\"档案并反馈。"
 fi
 echo
-FAILS=$(sqlite3 "$DB" "SELECT decide_fail FROM daily_stats WHERE date='$DAY';" 2>/dev/null)
+FAILS=$(sqlite3 "$DB" "SELECT decide_fail FROM daily_stats WHERE date='$ANALYZE_DAY';" 2>/dev/null)
 UPFAIL=$(grep -c "上传失败" "$WORK/data/voice_mvp.log" 2>/dev/null)
 ASRERR=$(grep -c "ASR failed" "$WORK/data/voice_mvp.log" 2>/dev/null)
 CRASH=$(grep -c "FATAL EXCEPTION" "$WORK/data/voice_mvp.log" 2>/dev/null)
