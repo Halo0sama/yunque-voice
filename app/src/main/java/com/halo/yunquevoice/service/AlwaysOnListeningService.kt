@@ -83,6 +83,10 @@ class AlwaysOnListeningService : Service() {
         @Volatile
         var isRunning = false
             private set
+
+        @Volatile
+        var isSpeaking = false
+            private set
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -120,7 +124,6 @@ class AlwaysOnListeningService : Service() {
     private var currentTtsFile: File? = null
     private var currentTtsPlayStartMs = 0L
     private var currentAssistantConvId = -1L
-    @Volatile private var speaking = false
     private var currentTtsText = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -529,8 +532,8 @@ class AlwaysOnListeningService : Service() {
 
     private fun processAudioFrame(frame: ByteArray, len: Int) {
         // 说话时暂不把 TTS 回声当作旁听内容
-        if (speaking) {
-            voiceMvpLog("SERVICE", "speaking，跳过 VAD")
+        if (isSpeaking) {
+            voiceMvpLog("SERVICE", "isSpeaking，跳过 VAD")
             return
         }
 
@@ -967,8 +970,8 @@ class AlwaysOnListeningService : Service() {
 
     private fun playTts(text: String, file: File) {
         mainHandler.post {
-            if (speaking) {
-                VoiceMvpLog.w("SERVICE", "already speaking, skip new TTS")
+            if (isSpeaking) {
+                VoiceMvpLog.w("SERVICE", "already isSpeaking, skip new TTS")
                 return@post
             }
             val player = MediaPlayer()
@@ -987,9 +990,9 @@ class AlwaysOnListeningService : Service() {
                 currentTtsFile = file
                 currentTtsPlayStartMs = System.currentTimeMillis()
                 currentTtsText = text
-                speaking = true
+                isSpeaking = true
                 player.setOnCompletionListener {
-                    speaking = false
+                    isSpeaking = false
                     currentPlayer = null
                     currentTtsFile = null
                     currentTtsText = ""
@@ -1001,7 +1004,7 @@ class AlwaysOnListeningService : Service() {
                 player.start()
                 VoiceMvpLog.i("SERVICE", "开始播报: ${text.take(120)}")
                 updateNotification("云雀正在说话…", interrupting = true)
-                broadcastStatus("speaking")
+                broadcastStatus("isSpeaking")
             } catch (e: Throwable) {
                 VoiceMvpLog.e("SERVICE", "播放失败: ${e.message}", e)
                 runCatching { player.release() }
@@ -1043,7 +1046,7 @@ class AlwaysOnListeningService : Service() {
 
             runCatching { player.stop() }
             runCatching { player.release() }
-            speaking = false
+            isSpeaking = false
             currentPlayer = null
             currentTtsFile = null
             currentTtsText = ""
@@ -1071,7 +1074,7 @@ class AlwaysOnListeningService : Service() {
         currentPlayer = null
         currentTtsFile = null
         currentAssistantConvId = -1L
-        speaking = false
+        isSpeaking = false
         currentTtsText = ""
     }
 

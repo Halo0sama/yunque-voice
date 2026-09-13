@@ -18,6 +18,14 @@ class ScheduleReceiver : BroadcastReceiver() {
         if (intent.action != ScheduleStore.ACTION_FIRE) return
         val type = intent.getStringExtra("type") ?: return
         VoiceMvpLog.i("SCHEDULE", "定时触发：$type")
+        // 开启类触发且规则指定了云雀状态：先切状态再启动（保持原有=不动仅聆听开关）
+        if (type == ScheduleStore.TYPE_START) {
+            val rule = ScheduleStore.loadRules(context).firstOrNull { it.id == intent.getLongExtra("ruleId", -1L) }
+            when (rule?.listenState) {
+                "listen_only" -> com.halo.yunquevoice.voice.Store.saveListenOnly(context, true)
+                "normal" -> com.halo.yunquevoice.voice.Store.saveListenOnly(context, false)
+            }
+        }
         val svc = Intent(context, AlwaysOnListeningService::class.java)
             .setAction(if (type == ScheduleStore.TYPE_START) AlwaysOnListeningService.ACTION_START else AlwaysOnListeningService.ACTION_STOP)
         if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(svc) else context.startService(svc)

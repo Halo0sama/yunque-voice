@@ -17,6 +17,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -452,11 +453,13 @@ private fun AppShell() {
 private fun HomeScreen(context: android.content.Context) {
     var running by remember { mutableStateOf(AlwaysOnListeningService.isRunning) }
     var listenOnly by remember { mutableStateOf(Store.listenOnlyEnabled(context)) }
+    var speaking by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
             running = AlwaysOnListeningService.isRunning
             listenOnly = Store.listenOnlyEnabled(context)
+            speaking = AlwaysOnListeningService.isSpeaking
             kotlinx.coroutines.delay(1000)
         }
     }
@@ -474,13 +477,15 @@ private fun HomeScreen(context: android.content.Context) {
     }
 
     Text("云雀·私人助理", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-    Text(
+    StatusBadge(
         when {
-            running && listenOnly -> "正在聆听（仅聆听，云雀不会开口）"
-            running -> "正在聆听（可打断）"
-            else -> "未开始聆听"
+            speaking && running -> "云雀正在说话"
+            running && listenOnly -> "仅聆听中"
+            running -> "正在聆听"
+            else -> "未在聆听"
         },
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        active = running,
+        speaking = speaking && running
     )
 
     Spacer(Modifier.size(16.dp))
@@ -529,7 +534,7 @@ private fun HomeScreen(context: android.content.Context) {
                 })
             })
             QuickButton(
-                if (listenOnly) "关闭仅聆听（恢复播报）" else "仅聆听（保持安静）",
+                if (listenOnly) "关闭仅聆听" else "仅聆听（保持安静）",
                 onClick = {
                     val next = !listenOnly
                     Store.saveListenOnly(context, next)
@@ -1525,7 +1530,11 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                                 fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.endMin <= r.startMin) "（跨午夜）" else ""),
                                 fontWeight = FontWeight.Bold
                             )
-                            Text(fmtDays(r.days), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                fmtDays(r.days) + (if (r.listenState == "listen_only") " · 仅聆听" else if (r.listenState == "normal") " · 正常" else ""),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         Switch(checked = r.enabled, onCheckedChange = { on ->
                             persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
@@ -1561,6 +1570,16 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                                 editing = if (pickerFor == "start") e.copy(startMin = tp.hour * 60 + tp.minute) else e.copy(endMin = tp.hour * 60 + tp.minute)
                                 pickerFor = null
                             }, modifier = Modifier.fillMaxWidth()) { Text("确定") }
+                        }
+                        Text("开启时云雀状态", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("" to "保持原有", "normal" to "正常聆听", "listen_only" to "仅聆听").forEach { (v, label) ->
+                                FilterChip(
+                                    selected = e.listenState == v,
+                                    onClick = { editing = e.copy(listenState = v) },
+                                    label = { Text(label) }
+                                )
+                            }
                         }
                         Text("重复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                         androidx.compose.foundation.layout.FlowRow(
@@ -1620,6 +1639,48 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
             text = "删除这条定时规则？\n" + fmtTime(r.startMin) + "-" + fmtTime(r.endMin) + " " + fmtDays(r.days),
             onConfirm = { persist(rules.filter { it.id != r.id }); deleteTarget = null },
             onDismiss = { deleteTarget = null }
+        )
+    }
+}
+
+
+/** 状态徽章：呼吸动画状态点 + 胶囊底，聆听时"活着"的感觉。 */
+@Composable
+private fun StatusBadge(text: String, active: Boolean, speaking: Boolean = false) {
+    val dotColor = when {
+        speaking -> MaterialTheme.colorScheme.primary
+        active -> Color(0xFF4CAF50)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "breath")
+    val breath by transition.animateFloat(
+        initialValue = 0.35f, targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1100),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+        ), label = "breathAlpha"
+    )
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(
+                (if (speaking) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+                    .copy(alpha = 0.7f)
+            )
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(9.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(dotColor.copy(alpha = if (active) breath else 0.9f))
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

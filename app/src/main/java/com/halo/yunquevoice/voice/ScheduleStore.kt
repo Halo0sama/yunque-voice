@@ -19,7 +19,9 @@ data class ScheduleRule(
     var enabled: Boolean = true,
     var startMin: Int,          // 0..1439
     var endMin: Int,            // 0..1439，<=start 视为跨午夜
-    var days: Set<Int>          // ISO：1=一 … 7=日
+    var days: Set<Int>,         // ISO：1=一 … 7=日
+    /** 开启时云雀状态：空=保持原有（不动仅聆听开关），normal=正常聆听，listen_only=仅聆听 */
+    var listenState: String = ""
 )
 
 object ScheduleStore {
@@ -46,7 +48,8 @@ object ScheduleStore {
                     enabled = o.optBoolean("enabled", true),
                     startMin = o.getInt("start"),
                     endMin = o.getInt("end"),
-                    days = days
+                    days = days,
+                    listenState = o.optString("listenState", "")
                 )
             }.toMutableList()
         }.getOrDefault(mutableListOf())
@@ -62,6 +65,7 @@ object ScheduleStore {
                     .put("start", r.startMin)
                     .put("end", r.endMin)
                     .put("days", JSONArray(r.days.sorted()))
+                    .put("listenState", r.listenState)
             )
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
