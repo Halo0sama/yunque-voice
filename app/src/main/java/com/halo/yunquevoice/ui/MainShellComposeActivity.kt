@@ -1563,7 +1563,9 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                             }, modifier = Modifier.fillMaxWidth()) { Text("确定") }
                         }
                         Text("重复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
                             listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { idx, name ->
                                 val day = idx + 1
                                 FilterChip(
