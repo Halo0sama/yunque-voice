@@ -80,16 +80,20 @@ class VoiceAssistantComposeActivity : ComponentActivity() {
         enableEdgeToEdge()
         VoiceMvpLog.init(this)
 
-        // 系统/小米语音触发：统一作为“起停全天聆听”
-        val action = if (com.halo.yunquevoice.service.AlwaysOnListeningService.isRunning) {
-            com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_STOP
-        } else {
-            com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_START
+        // 语音触发：按用户配置的耳机功能键动作分发
+        val btAction = com.halo.yunquevoice.voice.Store.btAction(this)
+        val action = when (btAction) {
+            com.halo.yunquevoice.voice.Store.BT_INTERRUPT -> com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_INTERRUPT
+            com.halo.yunquevoice.voice.Store.BT_SPEAK_NOW -> com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_SPEAK_NOW
+            else -> if (com.halo.yunquevoice.service.AlwaysOnListeningService.isRunning)
+                com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_STOP
+            else com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_START
         }
-        VoiceMvpLog.i("TRIGGER", "activity toggle action=$action running=${com.halo.yunquevoice.service.AlwaysOnListeningService.isRunning}")
+        VoiceMvpLog.i("TRIGGER", "activity bt=$btAction action=$action running=${com.halo.yunquevoice.service.AlwaysOnListeningService.isRunning}")
         val toggling = Intent(this, com.halo.yunquevoice.service.AlwaysOnListeningService::class.java)
             .setAction(action)
-        startForegroundService(toggling)
+        if (action == com.halo.yunquevoice.service.AlwaysOnListeningService.ACTION_INTERRUPT) startService(toggling)
+        else startForegroundService(toggling)
         finish()
         return
 

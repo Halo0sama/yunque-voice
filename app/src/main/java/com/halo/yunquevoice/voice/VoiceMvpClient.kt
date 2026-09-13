@@ -517,6 +517,39 @@ object VoiceMvpClient {
         }
     }
 
+    /**
+     * 云雀请发言：主人显式要求，不判断该不该说，只决定说什么——
+     * 结合当下语境说一句此刻最有价值的话（回应未答的问题/补充信息/提醒/简短总结）。
+     */
+    suspend fun speakNow(
+        deepSeekKey: String,
+        recentLine: String,
+        verbatimLines: List<String>,
+        context: Context?,
+        memories: List<String> = emptyList(),
+        myInfo: String = "",
+        summary: String = ""
+    ): String {
+        val roleContext = buildRoleContext(context, recentLine)
+        val profileText = if (context != null) {
+            val p = MemoryDb(context).loadProfileDoc().content
+            if (p.isNotBlank()) "【关于主人的画像】\n$p\n\n" else ""
+        } else ""
+        val summaryText = if (summary.isBlank()) "" else "【近期对话摘要】\n$summary\n\n"
+        val memoryText = if (memories.isNotEmpty()) {
+            "【记忆检索】\n" + memories.takeLast(10).joinToString("\n") { "- $it" } + "\n\n"
+        } else ""
+        val contextText = verbatimLines.takeLast(20).joinToString("\n")
+        val system = "你是云雀，主人刚刚按下了\"请发言\"键——他需要你此刻开口说点什么，但手头不方便出声叫你。" +
+            "结合当前对话语境和记忆，说出此刻对主人最有价值的一句话：可以是回答刚才没人回答的问题、" +
+            "补充一个有用的信息、给出一个贴心提醒、或对眼前话题的简短表态。" +
+            "口语化、自然、不超过三句话，像顺手插一句嘴，不要机械复述上下文。" +
+            "如果语境里实在没有可说的，就简短关心一下主人。"
+        val prompt = "${roleContext}【我的信息】$myInfo\n\n${profileText}${summaryText}${memoryText}【当前对话】\n$contextText\n\n请开口说这句话。只输出要说的话本身。"
+        val answer = completeWithTools(deepSeekKey, system, prompt, context, "SPEAK_NOW")
+        return answer.trim()
+    }
+
     suspend fun synthesize(dashScopeKey: String, text: String, out: File, voiceOverride: String? = null): Boolean =
         withContext(Dispatchers.IO) {
             val ttsVoice = voiceOverride?.takeIf { it.isNotBlank() } ?: TTS_VOICE

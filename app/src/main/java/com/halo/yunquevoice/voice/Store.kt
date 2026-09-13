@@ -33,6 +33,22 @@ object Store {
     private const val KEY_AUDIO_INPUT_DEVICE = "audio_input_device"
     private const val KEY_AUDIO_OUTPUT = "audio_output"
     private const val KEY_LISTENING_WAS_RUNNING = "listening_was_running"
+    private const val KEY_BT_ACTION = "bt_key_action"
+
+    /** 蓝牙耳机语音助手功能键触发的动作：toggle_listen（默认）/ interrupt / speak_now。 */
+    const val BT_TOGGLE_LISTEN = "toggle_listen"
+    const val BT_INTERRUPT = "interrupt"
+    const val BT_SPEAK_NOW = "speak_now"
+
+    fun btAction(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_BT_ACTION, BT_TOGGLE_LISTEN)
+            ?: BT_TOGGLE_LISTEN
+
+    fun saveBtAction(context: Context, action: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_BT_ACTION, action)
+        }
+    }
 
     /** 聆听是否应当处于运行状态（用于 START_STICKY 重启后自动恢复）。 */
     fun listeningWasRunning(context: Context): Boolean =

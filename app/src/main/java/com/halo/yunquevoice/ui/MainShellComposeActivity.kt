@@ -415,6 +415,12 @@ private fun HomeScreen(context: android.content.Context) {
                     action = AlwaysOnListeningService.ACTION_INTERRUPT
                 })
             })
+            QuickButton("云雀请发言", onClick = {
+                // 结合当下语境强制说一句；服务没跑会顺带拉起聆听
+                context.startForegroundService(Intent(context, AlwaysOnListeningService::class.java).apply {
+                    action = AlwaysOnListeningService.ACTION_SPEAK_NOW
+                })
+            })
             QuickButton(
                 if (listenOnly) "关闭仅聆听（恢复播报）" else "仅聆听（保持安静）",
                 onClick = {
@@ -951,6 +957,8 @@ private fun SettingsScreen(context: android.content.Context) {
     var textReply by remember { mutableStateOf(Store.listenOnlyTextReply(context)) }
     var showAudioSheet by remember { mutableStateOf(false) }
     var showKeepAliveSheet by remember { mutableStateOf(false) }
+    var showBtSheet by remember { mutableStateOf(false) }
+    var btActionSel by remember { mutableStateOf(Store.btAction(context)) }
     var audioSelTick by remember { mutableStateOf(0) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -962,6 +970,7 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("仅聆听与对话") { showListenSheet = true }
     QuickNav("麦克风与音质") { showAudioSheet = true }
     QuickNav("后台保活指引") { showKeepAliveSheet = true }
+    QuickNav("耳机功能键") { showBtSheet = true }
     QuickNav("每日数据导出") {
         if (android.os.Environment.isExternalStorageManager()) {
             android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
@@ -974,6 +983,39 @@ private fun SettingsScreen(context: android.content.Context) {
                 context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
             android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+    if (showBtSheet) {
+        YunqueBottomSheet(onDismiss = { showBtSheet = false }) {
+            Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+                Text("耳机功能键", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "蓝牙耳机的语音助手功能键按下时执行的动作（系统语音助手长按/快捷键唤起同理）：",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = {
+                    btActionSel = Store.BT_TOGGLE_LISTEN
+                    Store.saveBtAction(context, Store.BT_TOGGLE_LISTEN)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (btActionSel == Store.BT_TOGGLE_LISTEN) "✓ 开始/停止聆听（默认）" else "开始/停止聆听（默认）")
+                }
+                TextButton(onClick = {
+                    btActionSel = Store.BT_INTERRUPT
+                    Store.saveBtAction(context, Store.BT_INTERRUPT)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (btActionSel == Store.BT_INTERRUPT) "✓ 打断播报" else "打断播报")
+                }
+                TextButton(onClick = {
+                    btActionSel = Store.BT_SPEAK_NOW
+                    Store.saveBtAction(context, Store.BT_SPEAK_NOW)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (btActionSel == Store.BT_SPEAK_NOW) "✓ 云雀请发言" else "云雀请发言")
+                }
+                Text(
+                    "\"云雀请发言\"：让云雀结合当下语境说一句话——适用于它选择沉默、而你确实需要信息的时刻。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
     if (showKeepAliveSheet) {

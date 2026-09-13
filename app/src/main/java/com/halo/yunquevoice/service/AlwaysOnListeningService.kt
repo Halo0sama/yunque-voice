@@ -72,6 +72,7 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_DIAR = "com.halo.yunquevoice.action.TEST_DIAR"
         const val ACTION_APPLY_AUDIO = "com.halo.yunquevoice.action.APPLY_AUDIO"
         const val ACTION_TEST_WIPE = "com.halo.yunquevoice.action.TEST_WIPE"
+        const val ACTION_SPEAK_NOW = "com.halo.yunquevoice.action.SPEAK_NOW"
 
         const val CHANNEL_ID = "always_on"
         const val NOTIF_INTERRUPT_ID = 1002
@@ -182,6 +183,16 @@ class AlwaysOnListeningService : Service() {
             }
             ACTION_INTERRUPT -> {
                 interruptPlayback()
+            }
+            ACTION_SPEAK_NOW -> {
+                // 用户显式要求发言：顺带把聆听拉起来（服务没跑时），再结合当下语境说一句
+                if (!capturing) {
+                    Store.saveListeningWasRunning(this, true)
+                    startAsForeground()
+                    startCapture()
+                    YunqueApiServer.start(this)
+                }
+                scope.launch { speakNow() }
             }
             ACTION_SET_LISTEN_ONLY -> {
                 val enabled = intent?.getBooleanExtra("enabled", !Store.listenOnlyEnabled(this))
@@ -658,6 +669,48 @@ class AlwaysOnListeningService : Service() {
             }
         }
         handleTranscriptText(text)
+    }
+
+    /**
+     * 云雀请发言：结合当下语境强制说一句。用于它选择沉默、而主人确实需要信息时。
+     * 与 decide 的区别：不判断该不该说，只决定说什么——补充信息/回应未答/提醒/简短总结。
+     */
+    private suspend fun speakNow() {
+        val deepKey = Store.llmActiveKey(this)
+        val dashKey = Store.dashScopeKey(this)
+        if (deepKey.isBlank() || dashKey.isBlank()) {
+            VoiceMvpLog.w("SERVICE", "keys missing, cannot speak now")
+            return
+        }
+        WorkingMemory.stat(memoryDb, "speak_now")
+        val working = WorkingMemory.buildContext(memoryDb)
+        val recent = working.verbatimLines.lastOrNull() ?: "(当前没有旁听内容)"
+        val memories = if (Store.cloudMemoryEnabled(this)) {
+            runCatching { BailianMemory.search(this, recent).map { it.content } }.getOrElse { emptyList() }
+        } else emptyList()
+        val reply = runCatching {
+            VoiceMvpClient.speakNow(
+                deepKey, recent, working.verbatimLines, this,
+                memories = memories, myInfo = buildMyInfo(), summary = working.summary
+            )
+        }.getOrElse {
+            VoiceMvpLog.e("SERVICE", "speakNow failed: ${it.message}", it)
+            updateNotification("云雀想说点什么但没想出来（调用失败）", interrupting = true)
+            return
+        }
+        if (reply.isBlank()) return
+        val ttsFile = File(cacheDir, "yunque_proactive.wav")
+        val ok = runCatching {
+            VoiceMvpClient.synthesize(dashKey, reply, ttsFile, Store.voiceId(this).ifBlank { null })
+        }.getOrElse { false }
+        if (!ok) return
+        memoryDb.addConversation(
+            ConversationRecord(
+                id = 0, ts = System.currentTimeMillis(), speakerId = null,
+                speakerName = "云雀", text = reply, origin = "assistant"
+            )
+        )
+        playTts(reply, ttsFile)
     }
 
     /* ───────────── 工作记忆压缩 ───────────── */

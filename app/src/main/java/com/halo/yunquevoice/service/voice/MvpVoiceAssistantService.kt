@@ -16,15 +16,20 @@ class MvpVoiceAssistantService : Service() {
         if (intent?.action == "com.xiaoai.ACTION_BLUETOOTH_START_VOICEASSIST" ||
             intent?.action == "com.miui.voicetrigger.ACTION_VOICE_TRIGGER_START_VOICEASSIST"
         ) {
-            val action = if (AlwaysOnListeningService.isRunning) {
-                AlwaysOnListeningService.ACTION_STOP
-            } else {
-                AlwaysOnListeningService.ACTION_START
+            // 按用户配置分发耳机功能键动作：切换聆听 / 打断播报 / 云雀请发言
+            val btAction = com.halo.yunquevoice.voice.Store.btAction(this)
+            val action = when (btAction) {
+                com.halo.yunquevoice.voice.Store.BT_INTERRUPT -> AlwaysOnListeningService.ACTION_INTERRUPT
+                com.halo.yunquevoice.voice.Store.BT_SPEAK_NOW -> AlwaysOnListeningService.ACTION_SPEAK_NOW
+                else -> if (AlwaysOnListeningService.isRunning) AlwaysOnListeningService.ACTION_STOP
+                else AlwaysOnListeningService.ACTION_START
             }
-            android.util.Log.i("YunqueVoice", "MvpVoiceAssistantService toggle action=$action running=${AlwaysOnListeningService.isRunning}")
+            android.util.Log.i("YunqueVoice", "MvpVoiceAssistantService bt=$btAction action=$action running=${AlwaysOnListeningService.isRunning}")
             val listen = Intent(this, AlwaysOnListeningService::class.java)
                 .setAction(action)
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(listen) else startService(listen)
+            if (action == AlwaysOnListeningService.ACTION_INTERRUPT) {
+                startService(listen)
+            } else if (Build.VERSION.SDK_INT >= 26) startForegroundService(listen) else startService(listen)
             return START_NOT_STICKY
         }
         val launch = Intent(this, VoiceAssistantComposeActivity::class.java).apply {
