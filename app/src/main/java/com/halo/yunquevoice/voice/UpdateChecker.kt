@@ -66,16 +66,31 @@ object UpdateChecker {
         return false
     }
 
-    /** 下载 APK 到 cacheDir（后台线程）。返回文件或 null。 */
-    fun download(context: Context, url: String): File? {
+    /** 下载 APK 到 cacheDir（后台线程），onProgress(已读字节, 总字节) 每 ~256KB 回调。返回文件或 null。 */
+    fun download(context: Context, url: String, onProgress: (Long, Long) -> Unit = { _, _ -> }): File? {
         return runCatching {
             val out = File(context.cacheDir, "yunque_update.apk")
             out.delete()
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15000
             conn.readTimeout = 120000
+            val total = conn.contentLengthLong
             conn.inputStream.use { input ->
-                out.outputStream().use { input.copyTo(it) }
+                out.outputStream().use { os ->
+                    val buf = ByteArray(65536)
+                    var read = 0L
+                    var lastReport = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        os.write(buf, 0, n)
+                        read += n
+                        if (read - lastReport >= 262144 || (total > 0 && read >= total)) {
+                            lastReport = read
+                            onProgress(read, total)
+                        }
+                    }
+                }
             }
             conn.disconnect()
             if (out.length() > 1_000_000) out else null

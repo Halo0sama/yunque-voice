@@ -69,6 +69,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -78,6 +79,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -129,6 +133,8 @@ import com.halo.yunquevoice.memory.SpeakerProfile
 import com.halo.yunquevoice.memory.WorkingMemory
 import com.halo.yunquevoice.service.AlwaysOnListeningService
 import com.halo.yunquevoice.voice.MemoryUploader
+import com.halo.yunquevoice.voice.ScheduleRule
+import com.halo.yunquevoice.voice.ScheduleStore
 import com.halo.yunquevoice.voice.Store
 import com.halo.yunquevoice.voice.VoiceMvpClient
 import com.halo.yunquevoice.voice.VoiceMvpLog
@@ -264,51 +270,101 @@ private fun AppShell() {
     var updateInfo by remember { mutableStateOf<com.halo.yunquevoice.voice.UpdateChecker.UpdateInfo?>(null) }
     var downloading by remember { mutableStateOf(false) }
     var downloadMsg by remember { mutableStateOf("") }
+    var downloadProgress by remember { mutableStateOf(0f) }
+    var downloadSpeed by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.halo.yunquevoice.voice.UpdateChecker.check(BuildConfig.VERSION_NAME)
         }?.let { updateInfo = it }
     }
     updateInfo?.let { info ->
-        AlertDialog(
-            onDismissRequest = { updateInfo = null },
-            title = { Text("发现新版本 ${info.tag}") },
-            text = {
-                Column {
-                    Text(info.notes.take(300).ifBlank { "夜间自动优化与修复。" })
-                    Text(
-                        "APK 大小：${"%.1f".format(info.apkSize / 1048576.0)} MB",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+        YunqueBottomSheet(onDismiss = { if (!downloading) updateInfo = null }) {
+            Column(Modifier.padding(20.dp).navigationBarsPadding()) {
+                Text("发现新版本 ${info.tag}", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.size(8.dp))
+                Text(info.notes.take(280).ifBlank { "夜间自动优化与修复。" })
+                Text(
+                    "APK 大小：" + "%.1f".format(info.apkSize / 1048576.0) + " MB",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+                if (downloading) {
+                    Spacer(Modifier.size(8.dp))
+                    LinearProgressIndicator(
+                        progress = { downloadProgress },
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    if (downloading) Text(downloadMsg, color = MaterialTheme.colorScheme.primary)
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = !downloading, onClick = {
-                    downloading = true
-                    downloadMsg = "正在下载…"
-                    kotlinx.coroutines.MainScope().launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val f = com.halo.yunquevoice.voice.UpdateChecker.download(context, info.apkUrl)
-                        downloading = false
-                        if (f == null) {
-                            downloadMsg = "下载失败，可稍后重试或到 GitHub 手动下载"
-                            return@launch
-                        }
-                        val uri = androidx.core.content.FileProvider.getUriForFile(
-                            context, context.packageName + ".fileprovider", f)
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent(android.content.Intent.ACTION_VIEW)
-                                    .setDataAndType(uri, "application/vnd.android.package-archive")
-                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            )
-                        }.onFailure { downloadMsg = "已下载，拉起安装失败：${it.message}" }
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                        Text(
+                            (downloadProgress * 100).toInt().toString() + "%",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            downloadSpeed,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                }) { Text(if (downloading) "下载中…" else "下载并安装") }
-            },
-            dismissButton = { TextButton(onClick = { updateInfo = null }) { Text("下次再说") } }
-        )
+                } else if (downloadMsg.isNotBlank()) {
+                    Text(downloadMsg, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp))
+                }
+                Spacer(Modifier.size(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        enabled = !downloading,
+                        onClick = { updateInfo = null },
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (downloading) "下载中…" else "下次再说") }
+                    Button(
+                        enabled = !downloading,
+                        onClick = {
+                            downloading = true
+                            downloadMsg = ""
+                            downloadProgress = 0f
+                            val t0 = System.currentTimeMillis()
+                            var lastBytes = 0L
+                            var lastTime = t0
+                            kotlinx.coroutines.MainScope().launch(kotlinx.coroutines.Dispatchers.IO) {
+                                val f = com.halo.yunquevoice.voice.UpdateChecker.download(
+                                    context, info.apkUrl
+                                ) { read, total ->
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastTime >= 500) {
+                                        val speed = (read - lastBytes) * 1000.0 / (now - lastTime) / 1048576.0
+                                        lastBytes = read
+                                        lastTime = now
+                                        kotlinx.coroutines.MainScope().launch {
+                                            downloadSpeed = "%.2f MB/s".format(speed)
+                                            if (total > 0) downloadProgress = (read.toFloat() / total).coerceIn(0f, 1f)
+                                        }
+                                    }
+                                }
+                                kotlinx.coroutines.MainScope().launch {
+                                    downloading = false
+                                    if (f == null) {
+                                        downloadMsg = "下载失败，可稍后重试或到 GitHub 手动下载"
+                                        return@launch
+                                    }
+                                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                                        context, context.packageName + ".fileprovider", f)
+                                    runCatching {
+                                        context.startActivity(
+                                            android.content.Intent(android.content.Intent.ACTION_VIEW)
+                                                .setDataAndType(uri, "application/vnd.android.package-archive")
+                                                .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    }.onFailure { downloadMsg = "已下载，拉起安装失败：" + (it.message ?: "") }
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (downloading) "下载中…" else "下载并安装") }
+                }
+            }
+        }
     }
     val openChat = (context as? android.app.Activity)?.intent?.getStringExtra("open_tab") == "chat"
     // remember 必须保留：否则每次 recompose 都会重建 state，把通知跳转设置的 tab 打回首页
@@ -1010,6 +1066,7 @@ private fun SettingsScreen(context: android.content.Context) {
     var showKeepAliveSheet by remember { mutableStateOf(false) }
     var showBtSheet by remember { mutableStateOf(false) }
     var btActionSel by remember { mutableStateOf(Store.btAction(context)) }
+    var showScheduleSheet by remember { mutableStateOf(false) }
     var audioSelTick by remember { mutableStateOf(0) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -1022,6 +1079,7 @@ private fun SettingsScreen(context: android.content.Context) {
     QuickNav("麦克风与音质") { showAudioSheet = true }
     QuickNav("后台保活指引") { showKeepAliveSheet = true }
     QuickNav("耳机功能键") { showBtSheet = true }
+    QuickNav("定时开关聆听") { showScheduleSheet = true }
     QuickNav("每日数据导出") {
         if (android.os.Environment.isExternalStorageManager()) {
             android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
@@ -1035,6 +1093,9 @@ private fun SettingsScreen(context: android.content.Context) {
             }
             android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
         }
+    }
+    if (showScheduleSheet) {
+        ScheduleSheet(context, onDismiss = { showScheduleSheet = false })
     }
     if (showBtSheet) {
         YunqueBottomSheet(onDismiss = { showBtSheet = false }) {
@@ -1395,5 +1456,168 @@ private fun QuickButton(label: String, onClick: () -> Unit, active: Boolean = fa
         ) {
             Text(label, modifier = Modifier.padding(14.dp), color = content, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
+    }
+}
+
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var rules by remember { mutableStateOf(ScheduleStore.loadRules(context)) }
+    var editing by remember { mutableStateOf<ScheduleRule?>(null) }
+    var editingNew by remember { mutableStateOf(false) }
+    var pickerFor by remember { mutableStateOf<String?>(null) }
+    var deleteTarget by remember { mutableStateOf<ScheduleRule?>(null) }
+    var refreshTick by remember { mutableStateOf(0) }
+
+    fun persist(next: List<ScheduleRule>) {
+        rules = next.toMutableList()
+        ScheduleStore.saveRules(context, next)
+        refreshTick++
+    }
+
+    fun fmtTime(min: Int) = "%02d:%02d".format(min / 60, min % 60)
+    fun fmtDays(days: Set<Int>): String {
+        if (days.size == 7) return "每天"
+        val names = listOf("一", "二", "三", "四", "五", "六", "日")
+        return (1..7).filter { it in days }.joinToString("") { names[it - 1] }
+    }
+
+    YunqueBottomSheet(onDismiss = onDismiss) {
+        Column(Modifier.padding(20.dp).navigationBarsPadding().verticalScroll(rememberScrollState())) {
+            Text("定时开关聆听", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+            Text(
+                "到点自动开启/停止聆听。手动开关不受影响，下一个计划点照常执行；每次自动执行会有通知提醒（隐私透明）。结束时间早于开始时间视为跨午夜。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 6.dp)
+            )
+            // 下次动作预览
+            LaunchedEffect(refreshTick) {}
+            val next = remember(refreshTick) { ScheduleStore.nextTrigger(context) }
+            if (next != null) {
+                val t = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(next.first))
+                Text(
+                    "下次自动动作：$t " + (if (next.second == ScheduleStore.TYPE_START) "开启" else "停止") + "聆听",
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            } else {
+                Text("暂无生效规则", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
+            }
+            // 精确闹钟权限
+            if (!ScheduleStore.canExact(context)) {
+                Text("⚠️ 未授予精确闹钟权限，执行时间可能有几分钟误差", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                TextButton(onClick = {
+                    runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:" + context.packageName))) }
+                }) { Text("去授予精确闹钟权限") }
+            }
+
+            // 规则列表
+            rules.forEach { r ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.endMin <= r.startMin) "（跨午夜）" else ""),
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(fmtDays(r.days), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = r.enabled, onCheckedChange = { on ->
+                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
+                        })
+                        TextButton(onClick = { editing = rules.first { it.id == r.id }; editingNew = false; pickerFor = null }) { Text("编辑") }
+                        TextButton(onClick = { deleteTarget = r }) { Text("删除") }
+                    }
+                }
+            }
+
+            // 编辑面板
+            editing?.let { e ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(if (editingNew) "添加规则" else "编辑规则", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            TextButton(onClick = { pickerFor = if (pickerFor == "start") null else "start" }, modifier = Modifier.weight(1f)) {
+                                Text((if (pickerFor == "start") "✓ " else "") + "开始 " + fmtTime(e.startMin))
+                            }
+                            TextButton(onClick = { pickerFor = if (pickerFor == "end") null else "end" }, modifier = Modifier.weight(1f)) {
+                                Text((if (pickerFor == "end") "✓ " else "") + "结束 " + fmtTime(e.endMin))
+                            }
+                        }
+                        if (pickerFor != null) {
+                            val initH = if (pickerFor == "start") e.startMin / 60 else e.endMin / 60
+                            val initM = if (pickerFor == "start") e.startMin % 60 else e.endMin % 60
+                            val tp = rememberTimePickerState(initialHour = initH, initialMinute = initM, is24Hour = true)
+                            androidx.compose.material3.TimePicker(state = tp)
+                            TextButton(onClick = {
+                                editing = if (pickerFor == "start") e.copy(startMin = tp.hour * 60 + tp.minute) else e.copy(endMin = tp.hour * 60 + tp.minute)
+                                pickerFor = null
+                            }, modifier = Modifier.fillMaxWidth()) { Text("确定") }
+                        }
+                        Text("重复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { idx, name ->
+                                val day = idx + 1
+                                FilterChip(
+                                    selected = day in e.days,
+                                    onClick = {
+                                        val days = e.days.toMutableSet()
+                                        if (day in days) days.remove(day) else days.add(day)
+                                        editing = e.copy(days = days)
+                                    },
+                                    label = { Text(name) }
+                                )
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            TextButton(onClick = { editing = null; pickerFor = null }, modifier = Modifier.weight(1f)) { Text("取消") }
+                            Button(
+                                enabled = e.days.isNotEmpty(),
+                                onClick = {
+                                    if (editingNew) persist(rules + e) else persist(rules.map { if (it.id == e.id) e else it })
+                                    editing = null; pickerFor = null
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("保存") }
+                        }
+                    }
+                }
+            }
+
+            if (editing == null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { editing = ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet()); editingNew = true },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("+ 添加规则") }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = { persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet())) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("模板：每天 8-23") }
+                    TextButton(
+                        onClick = { persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 18 * 60, days = setOf(1, 2, 3, 4, 5))) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("模板：上学日 8-18") }
+                }
+            }
+        }
+    }
+
+    deleteTarget?.let { r ->
+        ConfirmDeleteDialog(
+            text = "删除这条定时规则？\n" + fmtTime(r.startMin) + "-" + fmtTime(r.endMin) + " " + fmtDays(r.days),
+            onConfirm = { persist(rules.filter { it.id != r.id }); deleteTarget = null },
+            onDismiss = { deleteTarget = null }
+        )
     }
 }
