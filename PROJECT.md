@@ -19,7 +19,7 @@
 - OkHttp、Coroutines、NanoHTTPD
 - ffmpeg-kit（`dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.7`）
 - LiquidGlass（`io.github.nadeemiqbal:liquid-glass:0.2.3`）
-- 对话模型三家可切（v0.11.0）：DeepSeek deepseek-v4-flash / 智谱 glm-5.3-flash / 阿里 qwen3.8-flash，Key 各自保存一键切换（`Store.llmKey/provider`）
+- 对话模型三家可切：DeepSeek deepseek-flash（v0.16.1 起从 v4-flash 更换，实测工具调用/关思考全兼容）/ 智谱 glm-5.3-flash / 阿里 qwen3.8-flash，Key 各自保存一键切换（`Store.llmKey/provider`）
 - 思考模式（实测）：deepseek `thinking.type=disabled` 可关；qwen `enable_thinking=false` 可关；智谱常思考仅 depth 分档（low/high/max）→ 实时路径统一"关或最浅"；**夜间压缩 thinkingMax**：deepseek 用顶层 `reasoning_effort=max`（官方标准参数；thinking 内无 depth 字段，传了被静默忽略——v0.13.3 修正）、智谱 `thinking.depth=max`、qwen 显式开启（质量优先）
 
 ## 构建与安装

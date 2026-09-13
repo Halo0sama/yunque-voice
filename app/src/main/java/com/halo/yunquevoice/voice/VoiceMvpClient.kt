@@ -35,7 +35,7 @@ object VoiceMvpClient {
     private fun llmModel(provider: String): String = when (provider) {
         Store.LLM_ZHIPU -> "glm-5.3-flash"
         Store.LLM_QWEN -> "qwen3.8-flash"
-        else -> "deepseek-v4-flash"
+        else -> "deepseek-flash"
     }
 
     /**
