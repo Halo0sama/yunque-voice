@@ -36,6 +36,7 @@ object UpdateChecker {
             val tag = o.optString("tag_name", "")
             if (tag.isBlank()) return null
             val latest = tag.removePrefix("v")
+            android.util.Log.i("YunqueVoice", "更新检查: latest=$latest current=$currentVersionName newer=${isNewer(latest, currentVersionName)}")
             if (!isNewer(latest, currentVersionName)) return null
             var apkUrl = ""
             var size = 0L

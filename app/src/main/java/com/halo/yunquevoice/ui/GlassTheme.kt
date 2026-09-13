@@ -25,7 +25,10 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
@@ -149,8 +152,8 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
     val is17 = mode == Store.THEME_GLASS17
     val scheme = if (glassLike) {
         base.copy(
-            surface = base.surface.copy(alpha = if (is17) 0.50f else 0.72f),
-            surfaceVariant = base.surfaceVariant.copy(alpha = if (is17) 0.34f else 0.55f),
+            surface = base.surface.copy(alpha = if (is17) { if (dark) 0.62f else 0.50f } else 0.72f),
+            surfaceVariant = base.surfaceVariant.copy(alpha = if (is17) { if (dark) 0.48f else 0.34f } else 0.55f),
             background = base.background.copy(alpha = 0.94f),
             primaryContainer = base.primaryContainer.copy(alpha = if (is17) 0.52f else 0.68f),
             secondaryContainer = base.secondaryContainer.copy(alpha = if (is17) 0.45f else 0.60f),
@@ -160,7 +163,17 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
         base
     }
     if (glassLike) {
-        val wallpaperBitmap = remember(context) {
+        // 壁纸随 ON_RESUME 重读：App 常驻后台时换壁纸，回来立即生效（remember(context) 会缓存死）
+        var wpTick by remember { mutableStateOf(0) }
+        val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+        androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+            val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) wpTick++
+            }
+            lifecycleOwner.lifecycle.addObserver(obs)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+        }
+        val wallpaperBitmap = remember(context, wpTick) {
             WallpaperReader.load(context)
         }
         Box(Modifier.fillMaxSize()) {
@@ -170,6 +183,14 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize().blur(if (is17) 36.dp else 28.dp),
                     contentScale = ContentScale.Crop
+                )
+            }
+            // 深色 scrim：保证浅色文字在任何壁纸上都有底衬，不再与背景融为一体
+            if (dark) {
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Color.Black.copy(alpha = if (is17) 0.45f else 0.32f)
+                    )
                 )
             }
             Box(
