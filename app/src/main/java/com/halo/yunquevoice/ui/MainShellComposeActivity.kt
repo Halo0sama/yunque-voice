@@ -1561,6 +1561,7 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
     var deleteTarget by remember { mutableStateOf<ScheduleRule?>(null) }
     var refreshTick by remember { mutableStateOf(0) }
     var importPreview by remember { mutableStateOf<List<com.halo.yunquevoice.voice.IcsParser.ParsedCourse>?>(null) }
+    var clearCoursesTarget by remember { mutableStateOf(false) }
 
     fun persist(next: List<ScheduleRule>) {
         rules = next.toMutableList()
@@ -1625,8 +1626,13 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                 }) { Text("去授予精确闹钟权限") }
             }
 
-            // 规则列表
-            rules.forEach { r ->
+            // 规则列表（手动 / 课程表导入 分区）
+            val manualRules = rules.filter { !it.isCourse }
+            val courseRules = rules.filter { it.isCourse }
+            if (manualRules.isNotEmpty() || courseRules.isEmpty()) {
+                Text("定时规则", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+            }
+            manualRules.forEach { r ->
                 Card(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -1648,6 +1654,38 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                             persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
                         })
                         TextButton(onClick = { editing = rules.first { it.id == r.id }; editingNew = false; pickerFor = null }) { Text("编辑") }
+                        TextButton(onClick = { deleteTarget = r }) { Text("删除") }
+                    }
+                }
+            }
+
+            if (courseRules.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp, start = 4.dp)) {
+                    Text(
+                        "课程表（上课静音 · ${courseRules.size}条）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { clearCoursesTarget = true }) { Text("清空") }
+                }
+            }
+            courseRules.forEach { r ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " 🔇 " + r.label,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = r.enabled, onCheckedChange = { on ->
+                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
+                        })
                         TextButton(onClick = { deleteTarget = r }) { Text("删除") }
                     }
                 }
@@ -1777,7 +1815,8 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                             endMin = c.endMin,
                             days = setOf(c.dayIso),
                             silent = true,
-                            label = c.name
+                            label = c.name,
+                            source = "course"
                         )
                     }
                     persist(rules + rulesNew)
@@ -1786,6 +1825,14 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                 }) { Text("导入") }
             },
             dismissButton = { TextButton(onClick = { importPreview = null }) { Text("取消") } }
+        )
+    }
+
+    if (clearCoursesTarget) {
+        ConfirmDeleteDialog(
+            text = "清空全部课程表导入的静音规则？\n（手动创建的定时规则不受影响）",
+            onConfirm = { persist(rules.filter { !it.isCourse }); clearCoursesTarget = false },
+            onDismiss = { clearCoursesTarget = false }
         )
     }
 

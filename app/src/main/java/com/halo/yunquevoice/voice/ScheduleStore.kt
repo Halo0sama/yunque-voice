@@ -25,8 +25,12 @@ data class ScheduleRule(
     /** 时段内行为：false=开启聆听（默认），true=保持安静（上课/会议模式：到点停止，结束恢复） */
     var silent: Boolean = false,
     /** 标注（如课程名），UI 显示 */
-    var label: String = ""
-)
+    var label: String = "",
+    /** 来源：manual=手动创建，course=课程表导入（兼容旧数据：label 非空且 silent 视作 course） */
+    var source: String = "manual"
+) {
+    val isCourse: Boolean get() = source == "course" || (label.isNotBlank() && silent)
+}
 
 object ScheduleStore {
 
@@ -55,7 +59,8 @@ object ScheduleStore {
                     days = days,
                     listenState = o.optString("listenState", ""),
                     silent = o.optBoolean("silent", false),
-                    label = o.optString("label", "")
+                    label = o.optString("label", ""),
+                    source = o.optString("source", "manual")
                 )
             }.toMutableList()
         }.getOrDefault(mutableListOf())
@@ -74,6 +79,7 @@ object ScheduleStore {
                     .put("listenState", r.listenState)
                     .put("silent", r.silent)
                     .put("label", r.label)
+                    .put("source", r.source)
             )
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
