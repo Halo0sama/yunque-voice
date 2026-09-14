@@ -173,11 +173,19 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
             lifecycleOwner.lifecycle.addObserver(obs)
             onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
         }
-        val wallpaperBitmap = remember(context, wpTick) {
+        // live wallpaper（Wallpaper Engine/动态壁纸）无法被第三方读取——改让壁纸直接透出，
+        // 轮换即时生效；静态壁纸仍走位图+模糊。
+        val isLiveWallpaper = remember(context, wpTick) {
+            runCatching { WallpaperManager.getInstance(context).wallpaperInfo != null }.getOrDefault(false)
+        }
+        val wallpaperBitmap = if (isLiveWallpaper) null else remember(context, wpTick) {
             WallpaperReader.load(context)
         }
         Box(Modifier.fillMaxSize()) {
-            if (wallpaperBitmap != null) {
+            if (isLiveWallpaper) {
+                // 透明：让系统（可能是动态轮换的）壁纸直接透出来
+                Box(Modifier.fillMaxSize())
+            } else if (wallpaperBitmap != null) {
                 Image(
                     bitmap = wallpaperBitmap.asImageBitmap(),
                     contentDescription = null,
@@ -185,11 +193,11 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
                     contentScale = ContentScale.Crop
                 )
             }
-            // 深色 scrim：保证浅色文字在任何壁纸上都有底衬，不再与背景融为一体
-            if (dark) {
+            // scrim：深色给文字底衬；live 模式下稍加强（无模糊层）
+            if (dark || isLiveWallpaper) {
                 Box(
                     Modifier.fillMaxSize().background(
-                        Color.Black.copy(alpha = if (is17) 0.45f else 0.32f)
+                        Color.Black.copy(alpha = if (isLiveWallpaper) (if (dark) 0.45f else 0.30f) else if (is17) 0.45f else 0.32f)
                     )
                 )
             }
