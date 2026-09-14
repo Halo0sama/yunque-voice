@@ -1075,29 +1075,35 @@ private fun SettingsScreen(context: android.content.Context) {
     var audioSelTick by remember { mutableStateOf(0) }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
-    QuickNav("AI 与接口") { showAiCard = true }
-    QuickNav("主题") { showTheme = true }
-    QuickNav("Operit 接入") { showOperit = true }
-    QuickNav("自定义音色") { showVoiceSheet = true }
-    QuickNav("通知栏控制") { showNotifSheet = true }
-    QuickNav("仅聆听与对话") { showListenSheet = true }
-    QuickNav("麦克风与音质") { showAudioSheet = true }
-    QuickNav("后台保活指引") { showKeepAliveSheet = true }
-    QuickNav("耳机功能键") { showBtSheet = true }
-    QuickNav("定时开关聆听") { showScheduleSheet = true }
-    QuickNav("每日数据导出") {
-        if (android.os.Environment.isExternalStorageManager()) {
-            android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
-        } else {
-            runCatching {
-                context.startActivity(android.content.Intent(
-                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    android.net.Uri.parse("package:" + context.packageName)))
-            }.onFailure {
-                context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-            }
-            android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
-        }
+    SettingsGroup("聆听") {
+        QuickRow("仅聆听与对话") { showListenSheet = true }
+        QuickRow("定时开关聆听") { showScheduleSheet = true }
+        QuickRow("耳机功能键") { showBtSheet = true }
+    }
+    SettingsGroup("声音") {
+        QuickRow("音频设备") { showAudioSheet = true }
+        QuickRow("自定义音色") { showVoiceSheet = true }
+    }
+    SettingsGroup("AI 与数据") {
+        QuickRow("AI 与接口") { showAiCard = true }
+        QuickRow("Operit 接入") { showOperit = true }
+        QuickRow("每日数据导出") { if (android.os.Environment.isExternalStorageManager()) {
+                android.widget.Toast.makeText(context, "已授权：每日导出到 Download/yunque_export，由夸克同步上云", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                runCatching {
+                    context.startActivity(android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        android.net.Uri.parse("package:" + context.packageName)))
+                }.onFailure {
+                    context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
+                android.widget.Toast.makeText(context, "请允许\"访问所有文件\"，每日导出才能写入 Download", android.widget.Toast.LENGTH_LONG).show()
+            } }
+    }
+    SettingsGroup("外观与系统") {
+        QuickRow("主题") { showTheme = true }
+        QuickRow("通知栏控制") { showNotifSheet = true }
+        QuickRow("后台保活指引") { showKeepAliveSheet = true }
     }
     if (showScheduleSheet) {
         ScheduleSheet(context, onDismiss = { showScheduleSheet = false })
@@ -1181,6 +1187,22 @@ private fun SettingsScreen(context: android.content.Context) {
         val am = context.getSystemService(android.media.AudioManager::class.java)
         var inSel by remember { mutableStateOf(Store.audioInputDevice(context)) }
         var outSel by remember { mutableStateOf(Store.audioOutput(context)) }
+        var micSel by remember { mutableStateOf(Store.micSource(context)) }
+        var btAuto by remember { mutableStateOf(Store.btAutoSwitchEnabled(context)) }
+        var profiles by remember { mutableStateOf(Store.btProfiles(context)) }
+        var editingAddr by remember { mutableStateOf<String?>(null) }
+        var btDevices by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+        val btPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) btDevices = bondedBtDevices(context)
+        }
+        LaunchedEffect(btAuto) {
+            if (btAuto && btDevices.isEmpty()) {
+                if (android.os.Build.VERSION.SDK_INT >= 31 &&
+                    context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+                ) btPermLauncher.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                else btDevices = bondedBtDevices(context)
+            }
+        }
         fun applyInput(sel: String) {
             inSel = sel
             Store.saveAudioInputDevice(context, sel)
@@ -1207,6 +1229,27 @@ private fun SettingsScreen(context: android.content.Context) {
                         "选蓝牙通话麦克风时走 SCO 通道，耳机里媒体音质会下降（蓝牙协议限制）。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text("拾音模式", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "语音优化（默认）：系统降噪增强人声，识别最稳；\n原始收录：不做任何处理，保留完整环境声与声音细节（声纹特征更丰富，嘈杂环境可尝试）；\n标准：介于两者之间。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(Store.MIC_VOICE_RECOGNITION to "语音优化", Store.MIC_RAW to "标准", Store.MIC_UNPROCESSED to "原始收录").forEach { (v, label) ->
+                        FilterChip(
+                            selected = micSel == v,
+                            onClick = {
+                                micSel = v
+                                Store.saveMicSource(context, v)
+                                context.startService(Intent(context, AlwaysOnListeningService::class.java).apply {
+                                    action = AlwaysOnListeningService.ACTION_APPLY_AUDIO
+                                })
+                            },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                Spacer(Modifier.size(10.dp))
                 Text("声音输入", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 TextButton(
                     onClick = { applyInput("builtin") },
@@ -1252,6 +1295,48 @@ private fun SettingsScreen(context: android.content.Context) {
                             Text(if (outSel == key) "✓ $name" else name)
                         }
                     }
+                Spacer(Modifier.size(10.dp))
+                Text("连接蓝牙自动切换", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    "总开关关闭时，任何连接事件都不触发切换。可为每台已配对设备设置连上后自动执行的动作；未配置的设备不动作。断开时不做恢复（由你或定时规则决定）。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("总开关", modifier = Modifier.weight(1f))
+                    Switch(checked = btAuto, onCheckedChange = { btAuto = it; Store.saveBtAutoSwitch(context, it) })
+                }
+                if (btAuto) {
+                    btDevices.forEach { dev ->
+                        val addr = dev.first; val dname = dev.second
+                        val prof = profiles[addr]
+                        TextButton(onClick = { editingAddr = if (editingAddr == addr) null else addr }, modifier = Modifier.fillMaxWidth()) {
+                            Text((if (editingAddr == addr) "▾ " else "▸ ") + dname + (if (prof != null && (prof.listenAction != "none" || prof.mic != "keep")) " ●" else ""))
+                        }
+                        if (editingAddr == addr) {
+                            Card(Modifier.fillMaxWidth().padding(horizontal = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))) {
+                                Column(Modifier.padding(10.dp)) {
+                                    var pa by remember(addr) { mutableStateOf(profiles[addr] ?: Store.BtProfile()) }
+                                    Text("聆听动作", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf("none" to "不动作", "start_normal" to "开启·正常", "start_listen_only" to "开启·仅聆听", "stop" to "停止聆听").forEach { (v, label) ->
+                                            FilterChip(selected = pa.listenAction == v, onClick = { pa = pa.copy(listenAction = v) }, label = { Text(label, style = MaterialTheme.typography.labelSmall) })
+                                        }
+                                    }
+                                    Text("麦克风", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        listOf("keep" to "不动作", "device" to "此设备麦克风", "phone" to "手机麦克风").forEach { (v, label) ->
+                                            FilterChip(selected = pa.mic == v, onClick = { pa = pa.copy(mic = v) }, label = { Text(label, style = MaterialTheme.typography.labelSmall) })
+                                        }
+                                    }
+                                    Row(Modifier.fillMaxWidth()) {
+                                        TextButton(onClick = { Store.removeBtProfile(context, addr); profiles = Store.btProfiles(context); editingAddr = null }, modifier = Modifier.weight(1f)) { Text("清除") }
+                                        Button(onClick = { Store.saveBtProfile(context, addr, pa); profiles = Store.btProfiles(context); editingAddr = null }, modifier = Modifier.weight(1f)) { Text("保存") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1684,3 +1769,56 @@ private fun StatusBadge(text: String, active: Boolean, speaking: Boolean = false
         )
     }
 }
+
+
+/** 设置分组：标题 + 组卡片（iOS 风格 inset list）。 */
+@Composable
+private fun SettingsGroup(title: String, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val glass17 = Store.themeMode(LocalContext.current) == Store.THEME_GLASS17
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 28.dp, bottom = 4.dp)
+        )
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = if (glass17) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                else MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(content = content)
+        }
+    }
+}
+
+/** 组内设置行（无卡背景，行间分隔线）。 */
+@Composable
+private fun QuickRow(label: String, last: Boolean = false, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 15.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, modifier = Modifier.weight(1f), fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+            Text("›", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (!last) androidx.compose.material3.HorizontalDivider(
+            Modifier.padding(start = 20.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        )
+    }
+}
+
+
+private fun bondedBtDevices(context: android.content.Context): List<Pair<String, String>> =
+    runCatching {
+        val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return emptyList()
+        adapter.bondedDevices.map { it.address to (runCatching { it.name }.getOrDefault(it.address.takeLast(5))) }
+            .sortedBy { it.second }
+    }.getOrDefault(emptyList())

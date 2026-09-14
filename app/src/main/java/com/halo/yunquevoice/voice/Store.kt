@@ -34,6 +34,58 @@ object Store {
     private const val KEY_AUDIO_OUTPUT = "audio_output"
     private const val KEY_LISTENING_WAS_RUNNING = "listening_was_running"
     private const val KEY_BT_ACTION = "bt_key_action"
+    private const val KEY_MIC_SOURCE = "mic_source"
+    private const val KEY_BT_AUTOSWITCH = "bt_autoswitch"
+    private const val KEY_BT_PROFILES = "bt_profiles"
+
+    /** 拾音模式：voice_recognition（默认，系统语音优化）/ mic（标准）/ unprocessed（原始收录，保声纹细节） */
+    const val MIC_VOICE_RECOGNITION = "voice_recognition"
+    const val MIC_RAW = "mic"
+    const val MIC_UNPROCESSED = "unprocessed"
+
+    fun micSource(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MIC_SOURCE, MIC_VOICE_RECOGNITION)
+            ?: MIC_VOICE_RECOGNITION
+
+    fun saveMicSource(context: Context, v: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString(KEY_MIC_SOURCE, v) }.also { }
+    }
+
+    /** 蓝牙连接自动切换单元总开关（关=一切连接事件不触发切换）。 */
+    fun btAutoSwitchEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_BT_AUTOSWITCH, false)
+
+    fun saveBtAutoSwitch(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean(KEY_BT_AUTOSWITCH, enabled) }
+    }
+
+    /** 设备档案：蓝牙地址 -> {listenAction: none/start_normal/start_listen_only/stop, mic: keep/device/phone} */
+    data class BtProfile(val listenAction: String = "none", val mic: String = "keep")
+
+    fun btProfiles(context: Context): Map<String, BtProfile> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_BT_PROFILES, null) ?: return emptyMap()
+        return runCatching {
+            val o = JSONObject(raw)
+            o.keys().asSequence().associateWith { k ->
+                val p = o.getJSONObject(k)
+                BtProfile(p.optString("listenAction", "none"), p.optString("mic", "keep"))
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun saveBtProfile(context: Context, address: String, profile: BtProfile) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val o = runCatching { JSONObject(prefs.getString(KEY_BT_PROFILES, "{}")) }.getOrElse { JSONObject() }
+        o.put(address, JSONObject().put("listenAction", profile.listenAction).put("mic", profile.mic))
+        prefs.edit { putString(KEY_BT_PROFILES, o.toString()) }
+    }
+
+    fun removeBtProfile(context: Context, address: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val o = runCatching { JSONObject(prefs.getString(KEY_BT_PROFILES, "{}")) }.getOrElse { JSONObject() }
+        o.remove(address)
+        prefs.edit { putString(KEY_BT_PROFILES, o.toString()) }
+    }
 
     /** 蓝牙耳机语音助手功能键触发的动作：toggle_listen（默认）/ interrupt / speak_now。 */
     const val BT_TOGGLE_LISTEN = "toggle_listen"

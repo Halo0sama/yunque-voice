@@ -419,7 +419,11 @@ class AlwaysOnListeningService : Service() {
         val scoWanted = preferred?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
             (sel == "builtin" && Store.audioInput(this) == Store.AUDIO_EARPHONE)
         val source = if (scoWanted) MediaRecorder.AudioSource.VOICE_COMMUNICATION
-        else MediaRecorder.AudioSource.VOICE_RECOGNITION
+        else when (Store.micSource(this)) {
+            Store.MIC_UNPROCESSED -> MediaRecorder.AudioSource.UNPROCESSED
+            Store.MIC_RAW -> MediaRecorder.AudioSource.MIC
+            else -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+        }
         if (scoWanted) {
             selectBluetoothInput()
         } else {
