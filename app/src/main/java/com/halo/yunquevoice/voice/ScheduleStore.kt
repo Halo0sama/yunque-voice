@@ -21,7 +21,11 @@ data class ScheduleRule(
     var endMin: Int,            // 0..1439，<=start 视为跨午夜
     var days: Set<Int>,         // ISO：1=一 … 7=日
     /** 开启时云雀状态：空=保持原有（不动仅聆听开关），normal=正常聆听，listen_only=仅聆听 */
-    var listenState: String = ""
+    var listenState: String = "",
+    /** 时段内行为：false=开启聆听（默认），true=保持安静（上课/会议模式：到点停止，结束恢复） */
+    var silent: Boolean = false,
+    /** 标注（如课程名），UI 显示 */
+    var label: String = ""
 )
 
 object ScheduleStore {
@@ -49,7 +53,9 @@ object ScheduleStore {
                     startMin = o.getInt("start"),
                     endMin = o.getInt("end"),
                     days = days,
-                    listenState = o.optString("listenState", "")
+                    listenState = o.optString("listenState", ""),
+                    silent = o.optBoolean("silent", false),
+                    label = o.optString("label", "")
                 )
             }.toMutableList()
         }.getOrDefault(mutableListOf())
@@ -66,6 +72,8 @@ object ScheduleStore {
                     .put("end", r.endMin)
                     .put("days", JSONArray(r.days.sorted()))
                     .put("listenState", r.listenState)
+                    .put("silent", r.silent)
+                    .put("label", r.label)
             )
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -95,11 +103,13 @@ object ScheduleStore {
                     set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
                     if (r.endMin <= r.startMin) add(Calendar.DAY_OF_YEAR, 1)
                 }
+                val startType = if (r.silent) TYPE_STOP else TYPE_START
+                val endType = if (r.silent) TYPE_START else TYPE_STOP
                 if (dayStart.timeInMillis > now + 3000 && (best == null || dayStart.timeInMillis < best!!.first)) {
-                    best = Triple(dayStart.timeInMillis, TYPE_START, r)
+                    best = Triple(dayStart.timeInMillis, startType, r)
                 }
                 if (dayEnd.timeInMillis > now + 3000 && (best == null || dayEnd.timeInMillis < best!!.first)) {
-                    best = Triple(dayEnd.timeInMillis, TYPE_STOP, r)
+                    best = Triple(dayEnd.timeInMillis, endType, r)
                 }
             }
             if (best != null && offset >= 1) break // 已有明天内的结果，无需再往后
