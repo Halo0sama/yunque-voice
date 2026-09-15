@@ -370,7 +370,7 @@ object VoiceMvpClient {
                 .put("model", llmModel(provider))
                 .put("stream", false)
                 .put("temperature", 0.2)
-                .put("max_tokens", 2000)
+                .put("max_tokens", if (thinkingMax) 16000 else 2000)
                 .put("messages", messages)
             if (thinkingMax) {
                 when (provider) {

@@ -125,12 +125,14 @@ object WorkingMemory {
         }.getOrElse {
             VoiceMvpLog.w("WORKMEM", "压缩调用失败($reason): ${it.message}")
             stat(db, "compaction_fail")
+            lastFailMs = System.currentTimeMillis()
             return false
         }
         val parsed = parseCompaction(content)
             ?: run {
                 VoiceMvpLog.w("WORKMEM", "压缩返回无法解析($reason): ${content.take(120)}")
                 stat(db, "compaction_fail")
+                lastFailMs = System.currentTimeMillis()
                 return false
             }
         val newSummary = parsed.optString("summary", "").take(SUMMARY_MAX_CHARS)
@@ -173,8 +175,12 @@ object WorkingMemory {
         return true
     }
 
-    /** 是否应该做每日压缩：本地日期跨天了。 */
-    fun shouldDailyCompact(db: MemoryDb): Boolean = db.loadSessionState().lastCompactionDay != today()
+    /** 是否应该做每日压缩：跨天 + 失败冷却 30 分钟（防持续失败时每句重试烧钱）。 */
+    fun shouldDailyCompact(db: MemoryDb): Boolean =
+        db.loadSessionState().lastCompactionDay != today() &&
+            System.currentTimeMillis() - lastFailMs > 30 * 60_000
+
+    @Volatile private var lastFailMs = 0L
 
     private fun parseCompaction(content: String): JSONObject? {
         val cleaned = content.trim()
