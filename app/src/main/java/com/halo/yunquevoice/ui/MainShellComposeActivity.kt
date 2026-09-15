@@ -1686,6 +1686,7 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                         Switch(checked = r.enabled, onCheckedChange = { on ->
                             persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
                         })
+                        TextButton(onClick = { editing = rules.first { it.id == r.id }; editingNew = false; pickerFor = null }) { Text("编辑") }
                         TextButton(onClick = { deleteTarget = r }) { Text("删除") }
                     }
                 }
@@ -1699,6 +1700,13 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(if (editingNew) "添加规则" else "编辑规则", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        if (e.label.isNotBlank()) {
+                            Text(
+                                "标注：" + e.label + (if (e.isCourse) "（课程表导入）" else ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                             TextButton(onClick = { pickerFor = if (pickerFor == "start") null else "start" }, modifier = Modifier.weight(1f)) {
                                 Text((if (pickerFor == "start") "✓ " else "") + "开始 " + fmtTime(e.startMin))
