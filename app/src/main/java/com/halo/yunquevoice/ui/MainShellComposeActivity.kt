@@ -1576,8 +1576,13 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
         return (1..7).filter { it in days }.joinToString("") { names[it - 1] }
     }
 
+    val sheetScroll = rememberScrollState()
+    // 编辑面板出现在列表末尾：editing 变化时自动滚到底部让它进入视口
+    LaunchedEffect(editing) {
+        if (editing != null) kotlinx.coroutines.delay(120); sheetScroll.animateScrollTo(sheetScroll.maxValue)
+    }
     YunqueBottomSheet(onDismiss = onDismiss) {
-        Column(Modifier.padding(20.dp).navigationBarsPadding().verticalScroll(rememberScrollState())) {
+        Column(Modifier.padding(20.dp).navigationBarsPadding().verticalScroll(sheetScroll)) {
             Text("定时开关聆听", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
             Text(
                 "到点自动开启/停止聆听。手动开关不受影响，下一个计划点照常执行；每次自动执行会有通知提醒（隐私透明）。结束时间早于开始时间视为跨午夜。",
@@ -1624,72 +1629,6 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                 TextButton(onClick = {
                     runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:" + context.packageName))) }
                 }) { Text("去授予精确闹钟权限") }
-            }
-
-            // 规则列表（手动 / 课程表导入 分区）
-            val manualRules = rules.filter { !it.isCourse }
-            val courseRules = rules.filter { it.isCourse }
-            if (manualRules.isNotEmpty() || courseRules.isEmpty()) {
-                Text("定时规则", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
-            }
-            manualRules.forEach { r ->
-                Card(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.endMin <= r.startMin) "（跨午夜）" else "") +
-                                    (if (r.silent) " 🔇" else "") + (if (r.label.isNotBlank()) " ${r.label}" else ""),
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                fmtDays(r.days) + (if (r.silent) " · 时段内安静" else "") + (if (r.listenState == "listen_only") " · 仅聆听" else if (r.listenState == "normal") " · 正常" else ""),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(checked = r.enabled, onCheckedChange = { on ->
-                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
-                        })
-                        TextButton(onClick = { editing = rules.first { it.id == r.id }; editingNew = false; pickerFor = null }) { Text("编辑") }
-                        TextButton(onClick = { deleteTarget = r }) { Text("删除") }
-                    }
-                }
-            }
-
-            if (courseRules.isNotEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp, start = 4.dp)) {
-                    Text(
-                        "课程表（上课静音 · ${courseRules.size}条）",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = { clearCoursesTarget = true }) { Text("清空") }
-                }
-            }
-            courseRules.forEach { r ->
-                Card(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " 🔇 " + r.label,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = r.enabled, onCheckedChange = { on ->
-                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
-                        })
-                        TextButton(onClick = { editing = rules.first { it.id == r.id }; editingNew = false; pickerFor = null }) { Text("编辑") }
-                        TextButton(onClick = { deleteTarget = r }) { Text("删除") }
-                    }
-                }
             }
 
             // 编辑面板
@@ -1771,6 +1710,85 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                     }
                 }
             }
+
+            // 规则列表（手动 / 课程表导入 分区）
+            val manualRules = rules.filter { !it.isCourse }
+            val courseRules = rules.filter { it.isCourse }
+            if (manualRules.isNotEmpty() || courseRules.isEmpty()) {
+                Text("定时规则", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+            }
+            manualRules.forEach { r ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.endMin <= r.startMin) "（跨午夜）" else "") +
+                                    (if (r.silent) " 🔇" else "") + (if (r.label.isNotBlank()) " ${r.label}" else ""),
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                fmtDays(r.days) + (if (r.silent) " · 时段内安静" else "") + (if (r.listenState == "listen_only") " · 仅聆听" else if (r.listenState == "normal") " · 正常" else ""),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = r.enabled, onCheckedChange = { on ->
+                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
+                        })
+                        TextButton(onClick = {
+                                            editing = rules.first { it.id == r.id }
+                            editingNew = false
+                            pickerFor = null
+                        }) { Text("编辑") }
+                        TextButton(onClick = {
+                            deleteTarget = r
+                        }) { Text("删除") }
+                    }
+                }
+            }
+
+            if (courseRules.isNotEmpty()) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp, start = 4.dp)) {
+                    Text(
+                        "课程表（上课静音 · ${courseRules.size}条）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { clearCoursesTarget = true }) { Text("清空") }
+                }
+            }
+            courseRules.forEach { r ->
+                Card(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " 🔇 " + r.label,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = r.enabled, onCheckedChange = { on ->
+                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
+                        })
+                        TextButton(onClick = {
+                                            editing = rules.first { it.id == r.id }
+                            editingNew = false
+                            pickerFor = null
+                        }) { Text("编辑") }
+                        TextButton(onClick = {
+                            deleteTarget = r
+                        }) { Text("删除") }
+                    }
+                }
+            }
+
 
             if (editing == null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
