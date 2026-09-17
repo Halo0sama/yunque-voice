@@ -20,7 +20,7 @@ data class ScheduleRule(
     var startMin: Int,          // 0..1439
     var endMin: Int,            // 0..1439，<=start 视为跨午夜
     var days: Set<Int>,         // ISO：1=一 … 7=日
-    /** 开启时云雀状态：空=保持原有，normal=正常聆听，listen_only=仅聆听，stop=停止聆听（下课自动恢复需依赖配对的开启规则） */
+    /** 兼容字段：""=正常聆听，listen_only=仅聆听。与 silent 组合派生时段行为（见 action）。 */
     var listenState: String = "",
     /** 时段内行为：false=开启聆听（默认），true=保持安静（上课/会议模式：到点停止，结束恢复） */
     var silent: Boolean = false,
@@ -30,6 +30,14 @@ data class ScheduleRule(
     var source: String = "manual"
 ) {
     val isCourse: Boolean get() = source == "course" || (label.isNotBlank() && silent)
+
+    /** 时段行为（v0.24.0 四态）：normal=开启聆听 / stop=停止聆听 / listen_only=仅聆听 / auto_restore=自动恢复 */
+    val action: String get() = when {
+        silent && listenState == "auto_restore" -> "auto_restore"
+        silent -> "stop"
+        listenState == "listen_only" -> "listen_only"
+        else -> "normal"
+    }
 }
 
 object ScheduleStore {
@@ -109,8 +117,8 @@ object ScheduleStore {
                     set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
                     if (r.endMin <= r.startMin) add(Calendar.DAY_OF_YEAR, 1)
                 }
-                val startType = if (r.silent) TYPE_STOP else TYPE_START
-                val endType = if (r.silent) TYPE_START else TYPE_STOP
+                val startType = if (r.action == "stop" || r.action == "auto_restore") TYPE_STOP else TYPE_START
+                val endType = if (r.action == "stop" || r.action == "normal") TYPE_START else TYPE_STOP
                 if (dayStart.timeInMillis > now + 3000 && (best == null || dayStart.timeInMillis < best!!.first)) {
                     best = Triple(dayStart.timeInMillis, startType, r)
                 }

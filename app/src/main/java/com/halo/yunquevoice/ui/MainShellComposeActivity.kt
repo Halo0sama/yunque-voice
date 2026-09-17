@@ -1553,7 +1553,6 @@ private fun QuickButton(label: String, onClick: () -> Unit, active: Boolean = fa
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
     var rules by remember { mutableStateOf(ScheduleStore.loadRules(context)) }
     var editing by remember { mutableStateOf<ScheduleRule?>(null) }
     var editingNew by remember { mutableStateOf(false) }
@@ -1563,56 +1562,50 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
     var importPreview by remember { mutableStateOf<List<com.halo.yunquevoice.voice.IcsParser.ParsedCourse>?>(null) }
     var clearCoursesTarget by remember { mutableStateOf(false) }
 
+    val icsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: ""
+                val courses = com.halo.yunquevoice.voice.IcsParser.parse(text)
+                if (courses.isEmpty()) {
+                    android.widget.Toast.makeText(context, "未解析到课程事件", android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    importPreview = courses
+                }
+            }.onFailure {
+                android.widget.Toast.makeText(context, "解析失败：" + (it.message ?: ""), android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     fun persist(next: List<ScheduleRule>) {
         rules = next.toMutableList()
         ScheduleStore.saveRules(context, next)
         refreshTick++
     }
-
     fun fmtTime(min: Int) = "%02d:%02d".format(min / 60, min % 60)
     fun fmtDays(days: Set<Int>): String {
         if (days.size == 7) return "每天"
         val names = listOf("一", "二", "三", "四", "五", "六", "日")
         return (1..7).filter { it in days }.joinToString("") { names[it - 1] }
     }
+    fun actionLabel(r: ScheduleRule) = when (r.action) {
+        "stop" -> "停止聆听"
+        "listen_only" -> "仅聆听"
+        "auto_restore" -> "自动恢复"
+        else -> "开启聆听"
+    }
 
     val sheetScroll = rememberScrollState()
-    // 编辑面板出现在列表末尾：editing 变化时自动滚到底部让它进入视口
-    LaunchedEffect(editing) {
-        if (editing != null) kotlinx.coroutines.delay(120); sheetScroll.animateScrollTo(sheetScroll.maxValue)
-    }
     YunqueBottomSheet(onDismiss = onDismiss) {
         Column(Modifier.padding(20.dp).navigationBarsPadding().verticalScroll(sheetScroll)) {
             Text("定时开关聆听", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
-            Text(
-                "到点自动开启/停止聆听。手动开关不受影响，下一个计划点照常执行；每次自动执行会有通知提醒（隐私透明）。结束时间早于开始时间视为跨午夜。",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 6.dp)
-            )
-            // 课程表一键导入
-            val icsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) {
-                    runCatching {
-                        val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: ""
-                        val courses = com.halo.yunquevoice.voice.IcsParser.parse(text)
-                        if (courses.isEmpty()) {
-                            android.widget.Toast.makeText(context, "未解析到课程事件", android.widget.Toast.LENGTH_LONG).show()
-                        } else {
-                            importPreview = courses
-                        }
-                    }.onFailure {
-                        android.widget.Toast.makeText(context, "解析失败：${it.message}", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
             Button(
-                onClick = { runCatching { icsLauncher.launch(arrayOf("text/calendar", "text/*", "application/*")) } },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-            ) { Text("导入课程表（.ics）→ 生成上课静音规则") }
+                onClick = { icsLauncher.launch(arrayOf("text/calendar", "text/*", "application/*")) },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+            ) { Text("导入课程表（.ics）→ 上课自动静音") }
 
-            // 下次动作预览
-            LaunchedEffect(refreshTick) {}
-            val next = remember(refreshTick) { ScheduleStore.nextTrigger(context) }
+            val next = remember(refreshTick) { runCatching { ScheduleStore.nextTrigger(context) }.getOrNull() }
             if (next != null) {
                 val t = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(next.first))
                 Text(
@@ -1623,201 +1616,86 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
             } else {
                 Text("暂无生效规则", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
             }
-            // 精确闹钟权限
             if (!ScheduleStore.canExact(context)) {
-                Text("⚠️ 未授予精确闹钟权限，执行时间可能有几分钟误差", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-                TextButton(onClick = {
-                    runCatching { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, android.net.Uri.parse("package:" + context.packageName))) }
-                }) { Text("去授予精确闹钟权限") }
+                Text("⚠️ 未授予精确闹钟权限，执行可能有几分钟误差", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
             }
 
-            // 编辑面板
-            editing?.let { e ->
-                Card(
-                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(if (editingNew) "添加规则" else "编辑规则", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        if (e.label.isNotBlank()) {
-                            Text(
-                                "标注：" + e.label + (if (e.isCourse) "（课程表导入）" else ""),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                            TextButton(onClick = { pickerFor = if (pickerFor == "start") null else "start" }, modifier = Modifier.weight(1f)) {
-                                Text((if (pickerFor == "start") "✓ " else "") + "开始 " + fmtTime(e.startMin))
-                            }
-                            TextButton(onClick = { pickerFor = if (pickerFor == "end") null else "end" }, modifier = Modifier.weight(1f)) {
-                                Text((if (pickerFor == "end") "✓ " else "") + "结束 " + fmtTime(e.endMin))
-                            }
-                        }
-                        if (pickerFor != null) {
-                            val initH = if (pickerFor == "start") e.startMin / 60 else e.endMin / 60
-                            val initM = if (pickerFor == "start") e.startMin % 60 else e.endMin % 60
-                            val tp = rememberTimePickerState(initialHour = initH, initialMinute = initM, is24Hour = true)
-                            androidx.compose.material3.TimePicker(state = tp)
-                            TextButton(onClick = {
-                                editing = if (pickerFor == "start") e.copy(startMin = tp.hour * 60 + tp.minute) else e.copy(endMin = tp.hour * 60 + tp.minute)
-                                pickerFor = null
-                            }, modifier = Modifier.fillMaxWidth()) { Text("确定") }
-                        }
-                        Text("时段内行为", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            FilterChip(selected = !e.silent, onClick = { editing = e.copy(silent = false) }, label = { Text("开启聆听") })
-                            FilterChip(selected = e.silent, onClick = { editing = e.copy(silent = true) }, label = { Text("停止聆听（上课）") })
-                        }
-                        if (e.silent) {
-                            Text(
-                                "时段内完全停止聆听（零耗电零采集），结束后自动恢复；\"开启时云雀状态\"对停止型规则不生效。",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text("开启时云雀状态（仅开启聆听时生效）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            listOf("" to "保持原有", "normal" to "正常聆听", "listen_only" to "仅聆听").forEach { (v, label) ->
-                                FilterChip(
-                                    selected = e.listenState == v,
-                                    onClick = { editing = e.copy(listenState = v) },
-                                    label = { Text(label) }
-                                )
-                            }
-                        }
-                        Text("重复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                        androidx.compose.foundation.layout.FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { idx, name ->
-                                val day = idx + 1
-                                FilterChip(
-                                    selected = day in e.days,
-                                    onClick = {
-                                        val days = e.days.toMutableSet()
-                                        if (day in days) days.remove(day) else days.add(day)
-                                        editing = e.copy(days = days)
-                                    },
-                                    label = { Text(name) }
-                                )
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                            TextButton(onClick = { editing = null; pickerFor = null }, modifier = Modifier.weight(1f)) { Text("取消") }
-                            Button(
-                                enabled = e.days.isNotEmpty(),
-                                onClick = {
-                                    if (editingNew) persist(rules + e) else persist(rules.map { if (it.id == e.id) e else it })
-                                    editing = null; pickerFor = null
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) { Text("保存") }
-                        }
-                    }
-                }
-            }
-
-            // 规则列表（手动 / 课程表导入 分区）
+            // 定时规则（手动）
             val manualRules = rules.filter { !it.isCourse }
-            val courseRules = rules.filter { it.isCourse }
-            if (manualRules.isNotEmpty() || courseRules.isEmpty()) {
+            if (manualRules.isNotEmpty() || courseRulesOf(rules).isEmpty()) {
                 Text("定时规则", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
             }
             manualRules.forEach { r ->
                 Card(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { editing = r; editingNew = false },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(
-                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.endMin <= r.startMin) "（跨午夜）" else "") +
-                                    (if (r.silent) " 🔇" else "") + (if (r.label.isNotBlank()) " ${r.label}" else ""),
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                fmtDays(r.days) + (if (r.silent) " · 时段内停止" else "") + (if (!r.silent && r.listenState == "listen_only") " · 仅聆听" else if (!r.silent && r.listenState == "normal") " · 正常" else ""),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Text(fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " · " + actionLabel(r), fontWeight = FontWeight.Bold)
+                            Text(fmtDays(r.days), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(checked = r.enabled, onCheckedChange = { on ->
                             persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
                         })
-                        TextButton(onClick = {
-                                            editing = rules.first { it.id == r.id }
-                            editingNew = false
-                            pickerFor = null
-                        }) { Text("编辑") }
-                        TextButton(onClick = {
-                            deleteTarget = r
-                        }) { Text("删除") }
                     }
                 }
             }
 
+            // 课程表（独立分区）
+            val courseRules = rules.filter { it.isCourse }
             if (courseRules.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp, start = 4.dp)) {
                     Text(
-                        "课程表（上课静音 · ${courseRules.size}条）",
+                        "课程表 · 上课静音（${courseRules.size}条）",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(onClick = { clearCoursesTarget = true }) { Text("清空") }
                 }
-            }
-            courseRules.forEach { r ->
-                Card(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " 🔇 " + r.label,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                courseRules.forEach { r ->
+                    Card(
+                        Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { editing = r; editingNew = false },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("🔇 " + fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " " + r.label, fontWeight = FontWeight.Bold)
+                                Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = r.enabled, onCheckedChange = { on ->
+                                persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
+                            })
                         }
-                        Switch(checked = r.enabled, onCheckedChange = { on ->
-                            persist(rules.map { if (it.id == r.id) it.copy(enabled = on) else it })
-                        })
-                        TextButton(onClick = {
-                                            editing = rules.first { it.id == r.id }
-                            editingNew = false
-                            pickerFor = null
-                        }) { Text("编辑") }
-                        TextButton(onClick = {
-                            deleteTarget = r
-                        }) { Text("删除") }
                     }
                 }
             }
 
-
-            if (editing == null) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { editing = ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet()); editingNew = true },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("+ 添加规则") }
-                }
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = { persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet())) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("模板：每天 8-23") }
-                    TextButton(
-                        onClick = { persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 18 * 60, days = setOf(1, 2, 3, 4, 5))) },
-                        modifier = Modifier.weight(1f)
-                    ) { Text("模板：上学日 8-18") }
-                }
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    android.util.Log.i("YunqueVoice", "添加规则点击")
+                    editing = ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet(), listenState = "normal")
+                    editingNew = true
+                }, modifier = Modifier.weight(1f)) { Text("+ 添加规则") }
+                TextButton(onClick = {
+                    persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet(), listenState = "normal"))
+                }, modifier = Modifier.weight(1f)) { Text("模板：每天 8-23") }
+                TextButton(onClick = {
+                    persist(rules + ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 18 * 60, days = setOf(1, 2, 3, 4, 5), listenState = "normal"))
+                }, modifier = Modifier.weight(1f)) { Text("模板：上学日 8-18") }
             }
         }
     }
 
+    // 规则编辑弹层（独立于 sheet，全屏聚焦）
+    editing?.let { e ->
+        EditRuleDialog(rule = e, isNew = editingNew, onDismiss = { editing = null; pickerFor = null }) { saved ->
+            persist(if (editingNew) rules + saved else rules.map { if (it.id == saved.id) saved else it })
+        }
+    }
+
+    // 课程表导入
     importPreview?.let { courses ->
         AlertDialog(
             onDismissRequest = { importPreview = null },
@@ -1830,12 +1708,6 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                         Text("· ${c.name} " + listOf("一","二","三","四","五","六","日")[c.dayIso-1] + " %02d:%02d-%02d:%02d".format(c.startMin/60, c.startMin%60, c.endMin/60, c.endMin%60), style = MaterialTheme.typography.labelSmall)
                     }
                     if (courses.size > 6) Text("… 等共 ${courses.size} 条", style = MaterialTheme.typography.labelSmall)
-                    Text(
-                        "上课到点自动停止聆听，下课自动恢复。单双周课程按每周处理（单双周错的那周会多静音一节课时段）。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
                 }
             },
             confirmButton = {
@@ -1843,13 +1715,8 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                     val base = System.currentTimeMillis()
                     val rulesNew = courses.mapIndexed { i, c ->
                         ScheduleRule(
-                            id = base + i,
-                            startMin = c.startMin,
-                            endMin = c.endMin,
-                            days = setOf(c.dayIso),
-                            silent = true,
-                            label = c.name,
-                            source = "course"
+                            id = base + i, startMin = c.startMin, endMin = c.endMin,
+                            days = setOf(c.dayIso), silent = true, label = c.name, source = "course"
                         )
                     }
                     persist(rules + rulesNew)
@@ -1876,6 +1743,97 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
             onDismiss = { deleteTarget = null }
         )
     }
+}
+
+private fun courseRulesOf(rules: List<ScheduleRule>) = rules.filter { it.isCourse }
+
+/** 规则编辑：独立全宽弹层（时间轴 + 四态行为 + 星期）。 */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun EditRuleDialog(
+    rule: ScheduleRule,
+    isNew: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (ScheduleRule) -> Unit
+) {
+    var e by remember { mutableStateOf(rule) }
+    var pickerFor by remember { mutableStateOf<String?>(null) }
+    fun fmtTime(min: Int) = "%02d:%02d".format(min / 60, min % 60)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isNew) "添加规则" else "编辑规则") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("时段行为", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(
+                        Triple("normal", "开启聆听", "开始开启 · 结束停止"),
+                        Triple("stop", "停止聆听", "开始停止 · 结束自动恢复（上课/会议）"),
+                        Triple("listen_only", "仅聆听", "开始切仅聆听 · 结束停并恢复"),
+                        Triple("auto_restore", "自动恢复", "结束恢复到开始前的聆听状态")
+                    ).forEach { (v, label, desc) ->
+                        Card(
+                            Modifier.fillMaxWidth().clickable {
+                                e = when (v) {
+                                    "stop" -> e.copy(silent = true, listenState = "")
+                                    "listen_only" -> e.copy(silent = false, listenState = "listen_only")
+                                    "auto_restore" -> e.copy(silent = true, listenState = "auto_restore")
+                                    else -> e.copy(silent = false, listenState = "normal")
+                                }
+                            },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (e.action == v) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surface
+                            )
+                        ) {
+                            Column(Modifier.padding(10.dp)) {
+                                Text((if (e.action == v) "✓ " else "") + label, fontWeight = FontWeight.Bold)
+                                Text(desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.size(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { pickerFor = if (pickerFor == "start") null else "start" }, modifier = Modifier.weight(1f)) {
+                        Text((if (pickerFor == "start") "✓ " else "") + "开始 " + fmtTime(e.startMin))
+                    }
+                    TextButton(onClick = { pickerFor = if (pickerFor == "end") null else "end" }, modifier = Modifier.weight(1f)) {
+                        Text((if (pickerFor == "end") "✓ " else "") + "结束 " + fmtTime(e.endMin))
+                    }
+                }
+                if (pickerFor != null) {
+                    val initH = if (pickerFor == "start") e.startMin / 60 else e.endMin / 60
+                    val initM = if (pickerFor == "start") e.startMin % 60 else e.endMin % 60
+                    val tp = rememberTimePickerState(initialHour = initH, initialMinute = initM, is24Hour = true)
+                    androidx.compose.material3.TimePicker(state = tp)
+                    TextButton(onClick = {
+                        e = if (pickerFor == "start") e.copy(startMin = tp.hour * 60 + tp.minute) else e.copy(endMin = tp.hour * 60 + tp.minute)
+                        pickerFor = null
+                    }, modifier = Modifier.fillMaxWidth()) { Text("确定时间") }
+                }
+                Text("重复", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("一", "二", "三", "四", "五", "六", "日").forEachIndexed { idx, name ->
+                        val day = idx + 1
+                        FilterChip(
+                            selected = day in e.days,
+                            onClick = {
+                                val days = e.days.toMutableSet()
+                                if (day in days) days.remove(day) else days.add(day)
+                                e = e.copy(days = days)
+                            },
+                            label = { Text(name) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = e.days.isNotEmpty(), onClick = { onSave(e); onDismiss() }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 

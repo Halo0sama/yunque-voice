@@ -19,22 +19,47 @@ class ScheduleReceiver : BroadcastReceiver() {
         val type = intent.getStringExtra("type") ?: return
         VoiceMvpLog.i("SCHEDULE", "定时触发：$type")
         val rule = ScheduleStore.loadRules(context).firstOrNull { it.id == intent.getLongExtra("ruleId", -1L) }
-        // silent 规则的方向已在排程时标好（start 时点=TYPE_STOP，end 时点=TYPE_START），此处原样执行
+        val action = rule?.action ?: "normal"
         val isStart = type == ScheduleStore.TYPE_START
-        if (isStart) {
-            // 恢复/开启聆听：仅非静音规则应用云雀状态（silent 的 START 只做恢复，不动仅聆听）
-            when (if (rule?.silent != true) rule?.listenState else "") {
-                "listen_only" -> com.halo.yunquevoice.voice.Store.saveListenOnly(context, true)
-                "normal" -> com.halo.yunquevoice.voice.Store.saveListenOnly(context, false)
-            }
-        } else {
-            // 停止聆听 + 清自动恢复标记（否则 STICKY 会在几秒内把聆听拉回来，停止形同虚设）
-            com.halo.yunquevoice.voice.Store.saveListeningWasRunning(context, false)
+        val sp = context.getSharedPreferences("yunque_schedule", Context.MODE_PRIVATE)
+
+        fun svc(start: Boolean) {
+            val i = Intent(context, AlwaysOnListeningService::class.java)
+                .setAction(if (start) AlwaysOnListeningService.ACTION_START else AlwaysOnListeningService.ACTION_STOP)
+            if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
         }
-        val svc = Intent(context, AlwaysOnListeningService::class.java)
-            .setAction(if (isStart) AlwaysOnListeningService.ACTION_START else AlwaysOnListeningService.ACTION_STOP)
-        if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(svc) else context.startService(svc)
-        notify(context, type)
+        when {
+            // 停止聆听：开始→停（清 STICKY 标记防复活）；结束→恢复开启
+            action == "stop" -> if (isStart) {
+                com.halo.yunquevoice.voice.Store.saveListeningWasRunning(context, false)
+                svc(false)
+            } else {
+                com.halo.yunquevoice.voice.Store.saveListeningWasRunning(context, true)
+                svc(true)
+            }
+            // 自动恢复：开始→记住当前状态；结束→恢复到开始前状态
+            action == "auto_restore" -> if (isStart) {
+                sp.edit().putBoolean("auto_prev", AlwaysOnListeningService.isRunning).apply()
+            } else {
+                svc(sp.getBoolean("auto_prev", false))
+            }
+            // 仅聆听：开始→切仅聆听+开；结束→停并恢复正常
+            action == "listen_only" -> if (isStart) {
+                com.halo.yunquevoice.voice.Store.saveListenOnly(context, true)
+                svc(true)
+            } else {
+                com.halo.yunquevoice.voice.Store.saveListenOnly(context, false)
+                svc(false)
+            }
+            // 开启聆听：开始→开（正常）；结束→停
+            else -> if (isStart) {
+                com.halo.yunquevoice.voice.Store.saveListenOnly(context, false)
+                svc(true)
+            } else {
+                svc(false)
+            }
+        }
+        notify(context, if (isStart) ScheduleStore.TYPE_START else ScheduleStore.TYPE_STOP)
         ScheduleStore.armNext(context)
     }
 
