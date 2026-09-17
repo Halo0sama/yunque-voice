@@ -1667,7 +1667,14 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                         Text("时段内行为", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             FilterChip(selected = !e.silent, onClick = { editing = e.copy(silent = false) }, label = { Text("开启聆听") })
-                            FilterChip(selected = e.silent, onClick = { editing = e.copy(silent = true) }, label = { Text("保持安静（上课）") })
+                            FilterChip(selected = e.silent, onClick = { editing = e.copy(silent = true) }, label = { Text("停止聆听（上课）") })
+                        }
+                        if (e.silent) {
+                            Text(
+                                "时段内完全停止聆听（零耗电零采集），结束后自动恢复；\"开启时云雀状态\"对停止型规则不生效。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         Text("开启时云雀状态（仅开启聆听时生效）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1730,7 +1737,7 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                fmtDays(r.days) + (if (r.silent) " · 时段内安静" else "") + (if (r.listenState == "listen_only") " · 仅聆听" else if (r.listenState == "normal") " · 正常" else ""),
+                                fmtDays(r.days) + (if (r.silent) " · 时段内停止" else "") + (if (!r.silent && r.listenState == "listen_only") " · 仅聆听" else if (!r.silent && r.listenState == "normal") " · 正常" else ""),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

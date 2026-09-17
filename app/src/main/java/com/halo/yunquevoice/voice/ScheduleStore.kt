@@ -20,7 +20,7 @@ data class ScheduleRule(
     var startMin: Int,          // 0..1439
     var endMin: Int,            // 0..1439，<=start 视为跨午夜
     var days: Set<Int>,         // ISO：1=一 … 7=日
-    /** 开启时云雀状态：空=保持原有（不动仅聆听开关），normal=正常聆听，listen_only=仅聆听 */
+    /** 开启时云雀状态：空=保持原有，normal=正常聆听，listen_only=仅聆听，stop=停止聆听（下课自动恢复需依赖配对的开启规则） */
     var listenState: String = "",
     /** 时段内行为：false=开启聆听（默认），true=保持安静（上课/会议模式：到点停止，结束恢复） */
     var silent: Boolean = false,
