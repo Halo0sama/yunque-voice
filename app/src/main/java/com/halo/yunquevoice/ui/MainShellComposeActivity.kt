@@ -495,7 +495,7 @@ private fun HomeScreen(context: android.content.Context) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("状态", fontWeight = FontWeight.Bold)
+            Text("状态", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             QuickButton(
                 if (running) "停止聆听" else "开始聆听",
                 onClick = {
@@ -1027,16 +1027,22 @@ private fun YunqueBottomSheet(
             containerColor = Color.Transparent,
             contentWindowInsets = { WindowInsets(0, 0, 0, 0) }
         ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
-                        RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
-                    )
+            // 透明容器不提供 LocalContentColor，内部无色 Text 会继承到深色默认值（黑字不可见），
+            // 此处统一锚定为 onSurface——所有 sheet 内文字（含未来新增）自动获得正确颜色
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface
             ) {
-                Column(Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    content()
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                            RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+                        )
+                ) {
+                    Column(Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        content()
+                    }
                 }
             }
         }
@@ -1713,10 +1719,10 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
             title = { Text("导入课程表") },
             text = {
                 Column {
-                    Text("解析到 ${courses.size} 个课程时段，将生成对应的“上课静音”规则：")
+                    Text("解析到 ${courses.size} 个课程时段，将生成对应的“上课静音”规则：", color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.size(6.dp))
                     courses.take(6).forEach { c ->
-                        Text("· ${c.name} " + listOf("一","二","三","四","五","六","日")[c.dayIso-1] + " %02d:%02d-%02d:%02d".format(c.startMin/60, c.startMin%60, c.endMin/60, c.endMin%60), style = MaterialTheme.typography.labelSmall)
+                        Text("· ${c.name} " + listOf("一","二","三","四","五","六","日")[c.dayIso-1] + " %02d:%02d-%02d:%02d".format(c.startMin/60, c.startMin%60, c.endMin/60, c.endMin%60), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
                     }
                     if (courses.size > 6) Text("… 等共 ${courses.size} 条", style = MaterialTheme.typography.labelSmall)
                 }
