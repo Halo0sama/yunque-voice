@@ -102,9 +102,13 @@ object BailianMemory {
             nodes.length()
         }
 
-    /** 批量写入既成事实（本地记忆迁移、手动整理）。 */
+    /** 批量写入既成事实（压缩产出、手动整理）。整批被云端拒收（如含审核敏感词）时自动二分重试，隔离问题条目、保住其余。 */
     suspend fun addFacts(context: Context, facts: List<String>): Int = withContext(Dispatchers.IO) {
-        if (facts.isEmpty()) return@withContext 0
+        addFactsRecursive(context, facts)
+    }
+
+    private suspend fun addFactsRecursive(context: Context, facts: List<String>): Int {
+        if (facts.isEmpty()) return 0
         val (_, lib) = checkConfig(context)
         val body = JSONObject()
             .put("user_id", Store.memoryUserId(context))
@@ -114,7 +118,17 @@ object BailianMemory {
                 JSONArray().put(JSONObject().put("role", "user").put("content", facts.joinToString("\n")))
             )
         val resp = call(context, authorized(context, "$BASE/add", body = body), "AddMemory(facts)")
-        resp.optJSONArray("memory_nodes")?.length() ?: 0
+        val nodes = resp.optJSONArray("memory_nodes")?.length() ?: 0
+        if (nodes > 0) return nodes
+        // HTTP 200 但 0 节点 = 整批被云端拒收（内容审核）。二分定位问题条目，保住其余。
+        if (facts.size == 1) {
+            VoiceMvpLog.w("BAILIAN", "单条被拒（疑似内容审核）: ${facts[0].take(40)}")
+            return 0
+        }
+        val mid = facts.size / 2
+        VoiceMvpLog.w("BAILIAN", "整批 ${facts.size} 条被拒，二分重试")
+        return addFactsRecursive(context, facts.subList(0, mid)) +
+            addFactsRecursive(context, facts.subList(mid, facts.size))
     }
 
     /** 手动添加：verbatim 存储，不走云端提炼改写。返回新节点 id 或空。 */
