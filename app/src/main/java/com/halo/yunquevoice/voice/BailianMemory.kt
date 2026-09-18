@@ -102,9 +102,26 @@ object BailianMemory {
             nodes.length()
         }
 
-    /** 批量写入既成事实（压缩产出、手动整理）。整批被云端拒收（如含审核敏感词）时自动二分重试，隔离问题条目、保住其余。 */
+    /** 批量写入既成事实（压缩产出、手动整理）。含敏感词先脱敏（* 替代），整批仍被拒时二分隔离。 */
     suspend fun addFacts(context: Context, facts: List<String>): Int = withContext(Dispatchers.IO) {
-        addFactsRecursive(context, facts)
+        addFactsRecursive(context, facts.map { sanitize(it) })
+    }
+
+    // 常见脏话脱敏表：保留首字+长度，语气与句式结构不变，云端审核可过，人看也懂
+    private val SANITIZE_WORDS = listOf(
+        "他妈的", "妈的", "卧槽", "我操", "操你", "他妈", "特么", "TM", "tm",
+        "傻逼", "牛逼", "SB", "sb", "草泥马", "妈逼", "狗逼", "娘的"
+    )
+
+    /** 敏感词 → 首字+* 填充（"他妈的"→"他**"）。命中多词时逐个替换。 */
+    fun sanitize(text: String): String {
+        var out = text
+        for (w in SANITIZE_WORDS) {
+            if (out.contains(w)) {
+                out = out.replace(w, w.first() + "*".repeat(w.length - 1))
+            }
+        }
+        return out
     }
 
     private suspend fun addFactsRecursive(context: Context, facts: List<String>): Int {
