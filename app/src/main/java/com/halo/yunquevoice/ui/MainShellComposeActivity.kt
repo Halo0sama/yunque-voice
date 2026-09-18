@@ -1347,7 +1347,7 @@ private fun SettingsScreen(context: android.content.Context) {
                 if (Store.llmProvider(context) == Store.LLM_QWEN_OMNI) {
                     var audioDirect by remember { mutableStateOf(Store.audioDirectEnabled(context)) }
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Text("直听模式（Omni 音频直入决策）", modifier = Modifier.weight(1f))
+                        Text("直听模式（Omni 音频直入决策）", modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
                         Switch(checked = audioDirect, onCheckedChange = { on ->
                             audioDirect = on
                             Store.saveAudioDirect(context, on)

@@ -697,7 +697,7 @@ class AlwaysOnListeningService : Service() {
         if (deepKey.isBlank() || dashKey.isBlank()) return
         maybeCompact()
         val working = WorkingMemory.buildContext(memoryDb)
-        val reply = runCatching {
+        val dd = runCatching {
             VoiceMvpClient.decideAudio(
                 dashKey, Store.listenMode(this), wav, working.verbatimLines, this,
                 memories = runCatching { BailianMemory.search(this, "(直听)").map { it.content } }.getOrElse { emptyList() },
@@ -707,6 +707,12 @@ class AlwaysOnListeningService : Service() {
             VoiceMvpLog.e("SERVICE", "直听决策失败: ${it.message}", it)
             return
         } ?: return
+        dd.heard.takeIf { it.isNotBlank() }?.let { heard ->
+            memoryDb.addConversation(
+                ConversationRecord(id = 0, ts = System.currentTimeMillis(), speakerId = null, speakerName = "(直听)", text = heard, origin = "other")
+            )
+        }
+        val reply = dd.reply ?: return
         WorkingMemory.stat(memoryDb, "direct_listen_reply")
         if (Store.listenOnlyEnabled(this) && Store.listenOnlyTextReply(this)) {
             memoryDb.addConversation(
@@ -937,12 +943,19 @@ class AlwaysOnListeningService : Service() {
                     }
             }
             if (audioDirect) {
-                VoiceMvpClient.decideAudio(
-                    deepKey, mode, audioWav!!, working.verbatimLines, this,
+                val dd = VoiceMvpClient.decideAudio(
+                    dashKey, mode, audioWav!!, working.verbatimLines, this,
                     memories = memories,
                     myInfo = buildMyInfo(),
                     summary = working.summary
                 )
+                // heard 转写入对话时间线：上下文/记忆提炼全链路保留
+                dd?.heard?.takeIf { it.isNotBlank() }?.let { heard ->
+                    memoryDb.addConversation(
+                        ConversationRecord(id = 0, ts = System.currentTimeMillis() - 500, speakerId = null, speakerName = "(直听)", text = heard, origin = "other")
+                    )
+                }
+                dd?.reply
             } else {
                 VoiceMvpClient.decide(
                     deepKey, mode, text, working.verbatimLines, this,

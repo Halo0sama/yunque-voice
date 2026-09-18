@@ -555,6 +555,8 @@ object VoiceMvpClient {
      * 直听决策（Qwen Omni 专用）：音频段直接给模型，跳过 ASR 文本。
      * 模型"亲耳听到"说话内容与语气，不受转写误差影响；声纹/记忆管线仍走独立 ASR。
      */
+    data class DirectDecision(val heard: String, val reply: String?)
+
     suspend fun decideAudio(
         dashScopeKey: String,
         mode: Int,
@@ -564,7 +566,7 @@ object VoiceMvpClient {
         memories: List<String> = emptyList(),
         myInfo: String = "",
         summary: String = ""
-    ): String? {
+    ): DirectDecision? {
         val base64 = withContext(Dispatchers.IO) { android.util.Base64.encodeToString(wav.readBytes(), android.util.Base64.NO_WRAP) }
         val roleContext = buildRoleContext(context, "(音频直听)")
         val profileText = if (context != null) {
@@ -583,7 +585,8 @@ object VoiceMvpClient {
         }
         val system = "你是云雀，正在旁听主人和身边人的对话。附带的音频是你刚刚听到的最新一段声音——请直接听它。" +
             modeHint + "用户问时间/日期/电量时属于直接提问，必须调用对应工具获取真实数据后回答。" +
-            "输出格式：要么 SILENT，要么 SPEAK:后面跟你想说的话。"
+            "输出严格的 JSON：{\"heard\":\"你在音频里听到的原话转写（多说话人用[某人]标注，听不清的部分省略）\"," +
+            "\"reply\":\"要说的话；判断为不该开口时填空字符串\"}。只输出 JSON。"
         val prompt = "${roleContext}【我的信息】$myInfo\n\n${profileText}${summaryText}${memoryText}【此前对话】\n$contextText\n\n请听音频并判断是否开口。"
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", system))
@@ -626,10 +629,14 @@ object VoiceMvpClient {
                 .put("tools", toolDefs)
             val resp2 = JSONObject(postJson(llmEndpoint(Store.LLM_QWEN_OMNI), dashScopeKey, body2, "DECIDE_AUDIO2"))
             val answer = resp2.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content").trim()
-            return if (answer.startsWith("SPEAK:")) answer.removePrefix("SPEAK:").trim().ifEmpty { null } else null
+            val heard2 = runCatching { JSONObject(answer).optString("heard", "") }.getOrElse { "" }
+            val reply2 = runCatching { JSONObject(answer).optString("reply", "") }.getOrElse { "" }
+            return DirectDecision(heard2, reply2.ifBlank { null })
         }
         val content = message.optString("content").trim()
-        return if (content.startsWith("SPEAK:")) content.removePrefix("SPEAK:").trim().ifEmpty { null } else null
+        val heard = runCatching { JSONObject(content).optString("heard", "") }.getOrElse { "" }
+        val reply = runCatching { JSONObject(content).optString("reply", "") }.getOrElse { "" }
+        return DirectDecision(heard, reply.ifBlank { null })
     }
 
     suspend fun synthesize(dashScopeKey: String, text: String, out: File, voiceOverride: String? = null): Boolean =
