@@ -637,12 +637,18 @@ class AlwaysOnListeningService : Service() {
         }
         val wav = File(cacheDir, "yunque_segment.wav")
         WavUtil.writeWav(wav, seg, SAMPLE_RATE)
+        // 直听模式（Qwen Omni + 开关开启）：ASR 失败或空文本时音频直接进决策，不中断
+        val audioDirect = Store.llmProvider(this) == Store.LLM_QWEN_OMNI && Store.audioDirectEnabled(this)
         val text = runCatching { VoiceMvpClient.transcribe(dashKey, wav) }
             .getOrElse {
                 VoiceMvpLog.e("SERVICE", "ASR failed: ${it.message}", it)
+                if (audioDirect) { handleSegmentAudioDirect(wav); return }
                 return
             }
-        if (text.isBlank()) return
+        if (text.isBlank()) {
+            if (audioDirect) handleSegmentAudioDirect(wav)
+            return
+        }
         val speaker = SpeakerEngine.recognize(memoryDb, seg)
         // 保存该说话人的最新录音样本，便于“身边的人”里试听辨认
         runCatching {
@@ -675,13 +681,50 @@ class AlwaysOnListeningService : Service() {
                 RelationshipExtractor.extract(memoryDb, key)
             }
         }
-        handleTranscriptText(text)
+        handleTranscriptText(text, audioWav = wav)
     }
 
     /**
      * 云雀请发言：结合当下语境强制说一句。用于它选择沉默、而主人确实需要信息时。
      * 与 decide 的区别：不判断该不该说，只决定说什么——补充信息/回应未答/提醒/简短总结。
      */
+    /**
+     * 直听兜底：ASR 失败/空文本时，音频直接交给 Omni 决策（对话文本缺失，不入记忆提炼）。
+     */
+    private suspend fun handleSegmentAudioDirect(wav: File) {
+        val deepKey = Store.llmActiveKey(this)
+        val dashKey = Store.dashScopeKey(this)
+        if (deepKey.isBlank() || dashKey.isBlank()) return
+        maybeCompact()
+        val working = WorkingMemory.buildContext(memoryDb)
+        val reply = runCatching {
+            VoiceMvpClient.decideAudio(
+                dashKey, Store.listenMode(this), wav, working.verbatimLines, this,
+                memories = runCatching { BailianMemory.search(this, "(直听)").map { it.content } }.getOrElse { emptyList() },
+                myInfo = buildMyInfo(), summary = working.summary
+            )
+        }.getOrElse {
+            VoiceMvpLog.e("SERVICE", "直听决策失败: ${it.message}", it)
+            return
+        } ?: return
+        WorkingMemory.stat(memoryDb, "direct_listen_reply")
+        if (Store.listenOnlyEnabled(this) && Store.listenOnlyTextReply(this)) {
+            memoryDb.addConversation(
+                ConversationRecord(id = 0, ts = System.currentTimeMillis(), speakerId = null, speakerName = "云雀", text = reply, origin = "assistant")
+            )
+            postChatNotification(reply)
+            broadcastStatus("listening")
+            return
+        }
+        if (Store.listenOnlyEnabled(this)) return
+        val ttsFile = File(cacheDir, "yunque_proactive.wav")
+        if (!runCatching { VoiceMvpClient.synthesize(dashKey, reply, ttsFile, Store.voiceId(this).ifBlank { null }) }.getOrElse { false }) return
+        memoryDb.addConversation(
+            ConversationRecord(id = 0, ts = System.currentTimeMillis(), speakerId = null, speakerName = "云雀", text = reply, origin = "assistant")
+        )
+        playTts(reply, ttsFile)
+    }
+
     private suspend fun speakNow() {
         val deepKey = Store.llmActiveKey(this)
         val dashKey = Store.dashScopeKey(this)
@@ -841,8 +884,8 @@ class AlwaysOnListeningService : Service() {
         }
     }
 
-    /** 拿到一段旁听文字后：进上下文、决策、必要时 TTS 并播放。 */
-    private suspend fun handleTranscriptText(text: String) {
+    /** 拿到一段旁听文字后：进上下文、决策、必要时 TTS 并播放。audioWav 非空且直听开启时走音频直听决策。 */
+    private suspend fun handleTranscriptText(text: String, audioWav: File? = null) {
         val deepKey = Store.llmActiveKey(this)
         val dashKey = Store.dashScopeKey(this)
         if (deepKey.isBlank() || dashKey.isBlank()) {
@@ -869,6 +912,8 @@ class AlwaysOnListeningService : Service() {
 
         val mode = Store.listenMode(this)
         val decideStart = System.currentTimeMillis()
+        val audioDirect = audioWav != null &&
+            Store.llmProvider(this) == Store.LLM_QWEN_OMNI && Store.audioDirectEnabled(this)
         val reply = runCatching {
             // 空库退避：连续 20 次检索脱靶后，每 50 次决策才探测一次（记忆入库有提炼时延，避免全天空转）
             val skipRetrieval = retrievalMissStreak >= 20 && retrievalMissStreak % 50 != 0
@@ -891,12 +936,21 @@ class AlwaysOnListeningService : Service() {
                         emptyList()
                     }
             }
-            VoiceMvpClient.decide(
-                deepKey, mode, text, working.verbatimLines, this,
-                memories = memories,
-                myInfo = buildMyInfo(),
-                summary = working.summary
-            )
+            if (audioDirect) {
+                VoiceMvpClient.decideAudio(
+                    deepKey, mode, audioWav!!, working.verbatimLines, this,
+                    memories = memories,
+                    myInfo = buildMyInfo(),
+                    summary = working.summary
+                )
+            } else {
+                VoiceMvpClient.decide(
+                    deepKey, mode, text, working.verbatimLines, this,
+                    memories = memories,
+                    myInfo = buildMyInfo(),
+                    summary = working.summary
+                )
+            }
         }.getOrElse {
             WorkingMemory.stat(memoryDb, "decide_fail")
             VoiceMvpLog.e("SERVICE", "DECIDE failed: ${it.message}", it)

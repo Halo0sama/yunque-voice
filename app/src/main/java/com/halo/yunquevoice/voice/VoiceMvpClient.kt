@@ -551,6 +551,87 @@ object VoiceMvpClient {
         return answer.trim()
     }
 
+    /**
+     * 直听决策（Qwen Omni 专用）：音频段直接给模型，跳过 ASR 文本。
+     * 模型"亲耳听到"说话内容与语气，不受转写误差影响；声纹/记忆管线仍走独立 ASR。
+     */
+    suspend fun decideAudio(
+        dashScopeKey: String,
+        mode: Int,
+        wav: File,
+        history: List<String>,
+        context: Context?,
+        memories: List<String> = emptyList(),
+        myInfo: String = "",
+        summary: String = ""
+    ): String? {
+        val base64 = withContext(Dispatchers.IO) { android.util.Base64.encodeToString(wav.readBytes(), android.util.Base64.NO_WRAP) }
+        val roleContext = buildRoleContext(context, "(音频直听)")
+        val profileText = if (context != null) {
+            val p = MemoryDb(context).loadProfileDoc().content
+            if (p.isNotBlank()) "【关于主人的画像】\n$p\n\n" else ""
+        } else ""
+        val summaryText = if (summary.isBlank()) "" else "【近期对话摘要】\n$summary\n\n"
+        val memoryText = if (memories.isNotEmpty()) {
+            "【记忆检索】\n" + memories.takeLast(10).joinToString("\n") { "- $it" } + "\n\n"
+        } else ""
+        val contextText = history.takeLast(12).joinToString("\n")
+        val modeHint = when (mode) {
+            Store.LISTEN_MODE_PROACTIVE -> "你能提供明确有用的建议时可以主动开口。"
+            Store.LISTEN_MODE_WAKE -> "只有主人明确叫了\"云雀\"或直接向你提问时才回应。"
+            else -> "只有主人直接问你、或你能提供高价值的明确建议时才开口；不要为了存在感而插话。"
+        }
+        val system = "你是云雀，正在旁听主人和身边人的对话。附带的音频是你刚刚听到的最新一段声音——请直接听它。" +
+            modeHint + "用户问时间/日期/电量时属于直接提问，必须调用对应工具获取真实数据后回答。" +
+            "输出格式：要么 SILENT，要么 SPEAK:后面跟你想说的话。"
+        val prompt = "${roleContext}【我的信息】$myInfo\n\n${profileText}${summaryText}${memoryText}【此前对话】\n$contextText\n\n请听音频并判断是否开口。"
+        val messages = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", system))
+            .put(JSONObject().put("role", "user").put("content", JSONArray()
+                .put(JSONObject().put("type", "input_audio").put("input_audio", JSONObject().put("data", "data:audio/wav;base64,$base64")))
+                .put(JSONObject().put("type", "text").put("text", prompt))))
+        val body = JSONObject()
+            .put("model", llmModel(Store.LLM_QWEN_OMNI))
+            .put("stream", false)
+            .put("enable_thinking", false)
+            .put("messages", messages)
+        val toolDefs = toolDefinitions()
+        body.put("tools", toolDefs)
+        if (context != null && OperitClient.isConfigured(context)) {
+            OperitClient.listTools(context)?.let { ext ->
+                for (i in 0 until ext.length()) body.getJSONArray("tools").put(ext.getJSONObject(i))
+            }
+        }
+        val resp = postJson(llmEndpoint(Store.LLM_QWEN_OMNI), dashScopeKey, body, "DECIDE_AUDIO")
+        val message = JSONObject(resp).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
+        val toolCalls = message.optJSONArray("tool_calls")
+        if (toolCalls != null && toolCalls.length() > 0) {
+            // 工具结果回填一轮（音频决策里时间/电量类问题常见）
+            val assistantMsg = JSONObject()
+                .put("role", "assistant")
+                .put("content", message.optString("content"))
+                .put("tool_calls", toolCalls)
+            val messages2 = JSONArray().put(messages.getJSONObject(0)).put(messages.getJSONObject(1)).put(assistantMsg)
+            for (i in 0 until toolCalls.length()) {
+                val call = toolCalls.getJSONObject(i)
+                val fn = call.getJSONObject("function")
+                val result = executeTool(fn.optString("name"), runCatching { JSONObject(fn.optString("arguments")) }.getOrElse { JSONObject() }, context)
+                messages2.put(JSONObject().put("role", "tool").put("tool_call_id", call.optString("id")).put("content", result))
+            }
+            val body2 = JSONObject()
+                .put("model", llmModel(Store.LLM_QWEN_OMNI))
+                .put("stream", false)
+                .put("enable_thinking", false)
+                .put("messages", messages2)
+                .put("tools", toolDefs)
+            val resp2 = JSONObject(postJson(llmEndpoint(Store.LLM_QWEN_OMNI), dashScopeKey, body2, "DECIDE_AUDIO2"))
+            val answer = resp2.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content").trim()
+            return if (answer.startsWith("SPEAK:")) answer.removePrefix("SPEAK:").trim().ifEmpty { null } else null
+        }
+        val content = message.optString("content").trim()
+        return if (content.startsWith("SPEAK:")) content.removePrefix("SPEAK:").trim().ifEmpty { null } else null
+    }
+
     suspend fun synthesize(dashScopeKey: String, text: String, out: File, voiceOverride: String? = null): Boolean =
         withContext(Dispatchers.IO) {
             val ttsVoice = voiceOverride?.takeIf { it.isNotBlank() } ?: TTS_VOICE

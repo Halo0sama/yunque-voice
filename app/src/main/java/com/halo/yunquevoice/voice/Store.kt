@@ -51,6 +51,16 @@ object Store {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putString(KEY_MIC_SOURCE, v) }.also { }
     }
 
+    private const val KEY_AUDIO_DIRECT = "audio_direct"
+
+    /** 直听模式：仅 Qwen Omni 时可选——决策时把音频直接给模型（不经过 ASR 转写）。 */
+    fun audioDirectEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_AUDIO_DIRECT, false)
+
+    fun saveAudioDirect(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit { putBoolean(KEY_AUDIO_DIRECT, enabled) }
+    }
+
     /** 蓝牙连接自动切换单元总开关（关=一切连接事件不触发切换）。 */
     fun btAutoSwitchEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_BT_AUTOSWITCH, false)

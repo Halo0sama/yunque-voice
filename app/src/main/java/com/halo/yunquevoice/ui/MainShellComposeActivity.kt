@@ -1344,6 +1344,21 @@ private fun SettingsScreen(context: android.content.Context) {
         YunqueBottomSheet(onDismiss = { showListenSheet = false }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text("仅聆听", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+                if (Store.llmProvider(context) == Store.LLM_QWEN_OMNI) {
+                    var audioDirect by remember { mutableStateOf(Store.audioDirectEnabled(context)) }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text("直听模式（Omni 音频直入决策）", modifier = Modifier.weight(1f))
+                        Switch(checked = audioDirect, onCheckedChange = { on ->
+                            audioDirect = on
+                            Store.saveAudioDirect(context, on)
+                        })
+                    }
+                    Text(
+                        "开启后决策直接听音频原文，不受语音识别误差影响；识别文本仍照常生成供记忆与声纹使用。仅 Qwen Omni 支持此开关。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
                     "仅聆听时云雀只听不说。\u201c云雀有话要说\u201d决定它是否用文字在对话面板里回应：关闭则完全沉默、零消耗。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
