@@ -246,6 +246,11 @@ object VoiceMvpClient {
         messages.put(JSONObject().put("role", "user").put("content", user))
         var answer = ""
         val toolDefs = toolDefinitions()
+        val forcedChoice = forcedTool?.let {
+            JSONObject().put("type", "function").put("function", JSONObject().put("name", it))
+        }
+        if (forcedTool != null) {
+        }
         if (context != null && OperitClient.isConfigured(context)) {
             OperitClient.listTools(context)?.let { ext ->
                 for (i in 0 until ext.length()) toolDefs.put(ext.getJSONObject(i))
@@ -261,6 +266,8 @@ object VoiceMvpClient {
                 .put("tools", toolDefs)
             // 实时对话路径：思考关闭或最浅（各家能力见 applyRealtimeThinking）
             applyRealtimeThinking(body, provider)
+            // 强制工具仅在第一轮：后续轮模型需基于工具结果回答，否则无限循环调工具
+            if (turn == 0) forcedChoice?.let { body.put("tool_choice", it) }
             val resp = JSONObject(postJson(llmEndpoint(provider), deepSeekKey, body, label))
             val message = resp.getJSONArray("choices").getJSONObject(0).getJSONObject("message")
             val toolCalls = message.optJSONArray("tool_calls")
