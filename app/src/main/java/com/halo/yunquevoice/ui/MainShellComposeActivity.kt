@@ -1678,7 +1678,7 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
                     ) {
                         Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text("🔇 " + fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + " " + r.label, fontWeight = FontWeight.Bold)
+                                Text(fmtTime(r.startMin) + " - " + fmtTime(r.endMin) + (if (r.label.isNotBlank()) " " + r.label else ""), fontWeight = FontWeight.Bold)
                                 Text(fmtDays(r.days) + " · 上课静音", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(checked = r.enabled, onCheckedChange = { on ->
@@ -1691,7 +1691,6 @@ private fun ScheduleSheet(context: android.content.Context, onDismiss: () -> Uni
 
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
-                    android.util.Log.i("YunqueVoice", "添加规则点击")
                     editing = ScheduleRule(id = System.currentTimeMillis(), startMin = 8 * 60, endMin = 23 * 60, days = (1..7).toSet(), listenState = "normal")
                     editingNew = true
                 }, modifier = Modifier.weight(1f)) { Text("+ 添加规则") }
