@@ -28,13 +28,14 @@ object VoiceMvpClient {
     /** 对话模型供应商路由：均为 OpenAI 兼容协议（含工具调用）。 */
     private fun llmEndpoint(provider: String): String = when (provider) {
         Store.LLM_ZHIPU -> "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-        Store.LLM_QWEN -> "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        Store.LLM_QWEN, Store.LLM_QWEN_OMNI -> "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
         else -> "https://api.deepseek.com/chat/completions"
     }
 
     private fun llmModel(provider: String): String = when (provider) {
         Store.LLM_ZHIPU -> "glm-5.3-flash"
         Store.LLM_QWEN -> "qwen3.8-flash"
+        Store.LLM_QWEN_OMNI -> "qwen3.8-omni-flash"
         else -> "deepseek-flash"
     }
 
@@ -48,7 +49,7 @@ object VoiceMvpClient {
     private fun applyRealtimeThinking(body: JSONObject, provider: String) {
         when (provider) {
             Store.LLM_DEEPSEEK -> body.put("thinking", JSONObject().put("type", "disabled"))
-            Store.LLM_QWEN -> body.put("enable_thinking", false)
+            Store.LLM_QWEN, Store.LLM_QWEN_OMNI -> body.put("enable_thinking", false)
             Store.LLM_ZHIPU -> body.put("thinking", JSONObject().put("type", "enabled").put("depth", "low"))
         }
     }

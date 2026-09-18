@@ -129,9 +129,9 @@ object Store {
     const val LLM_DEEPSEEK = "deepseek"
     const val LLM_ZHIPU = "zhipu"
     const val LLM_QWEN = "qwen"
-    val LLM_PROVIDERS = listOf(LLM_DEEPSEEK, LLM_ZHIPU, LLM_QWEN)
+    const val LLM_QWEN_OMNI = "qwen_omni"
+    val LLM_PROVIDERS = listOf(LLM_DEEPSEEK, LLM_ZHIPU, LLM_QWEN, LLM_QWEN_OMNI)
 
-    /** 对话模型供应商（deepseek / zhipu / qwen），各供应商 Key 独立保存，切换即换。 */
     fun llmProvider(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_LLM_PROVIDER, LLM_DEEPSEEK)
             ?: LLM_DEEPSEEK
@@ -142,7 +142,15 @@ object Store {
         }
     }
 
-    /** 当前供应商的 Key（旧版存在 deepseek_key 里的自动迁移）。 */
+    /** 供应商显示名。 */
+    fun llmLabel(provider: String): String = when (provider) {
+        LLM_ZHIPU -> "智谱 GLM"
+        LLM_QWEN -> "Qwen（阿里）"
+        LLM_QWEN_OMNI -> "Qwen Omni（音频）"
+        else -> "DeepSeek"
+    }
+
+    /** 每供应商 Key（v0.11 起多 Key 独立保存；旧 deepseek_key 自动迁移）。 */
     fun llmKey(context: Context, provider: String): String {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs.getString("llm_key_$provider", null)?.let { return it }
@@ -185,6 +193,7 @@ object Store {
             putString(KEY_AUDIO_OUTPUT, sel)
         }
     }
+
 
     // 1 = 只在该说时说；2 = 更主动旁听建议；3 = 只响应“云雀”唤醒
     const val LISTEN_MODE_SAFE = 1

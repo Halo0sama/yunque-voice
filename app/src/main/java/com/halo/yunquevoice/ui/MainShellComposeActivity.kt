@@ -1402,11 +1402,7 @@ private fun SettingsScreen(context: android.content.Context) {
                 Text("对话模型（点击即切换，各家的 Key 分别保存）", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Store.LLM_PROVIDERS.forEach { p ->
-                        val label = when (p) {
-                            Store.LLM_ZHIPU -> "智谱 GLM"
-                            Store.LLM_QWEN -> "Qwen（阿里）"
-                            else -> "DeepSeek"
-                        }
+                        val label = Store.llmLabel(p)
                         FilterChip(
                             selected = aiProviderEdit == p,
                             onClick = {
@@ -1424,7 +1420,7 @@ private fun SettingsScreen(context: android.content.Context) {
                         keyDraft = it
                         Store.saveLlmKey(context, aiProviderEdit, it)
                     },
-                    label = { Text("${when (aiProviderEdit) { Store.LLM_ZHIPU -> "智谱"; Store.LLM_QWEN -> "阿里Qwen"; else -> "DeepSeek" }} API Key") },
+                    label = { Text(Store.llmLabel(aiProviderEdit) + " API Key") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.padding(top = 8.dp))
