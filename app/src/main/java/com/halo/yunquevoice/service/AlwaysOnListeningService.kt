@@ -639,15 +639,13 @@ class AlwaysOnListeningService : Service() {
         WavUtil.writeWav(wav, seg, SAMPLE_RATE)
         // 直听模式（Qwen Omni + 开关开启）：ASR 失败或空文本时音频直接进决策，不中断
         val audioDirect = Store.llmProvider(this) == Store.LLM_QWEN_OMNI && Store.audioDirectEnabled(this)
-        val text = runCatching { VoiceMvpClient.transcribe(dashKey, wav) }
-            .getOrElse {
-                VoiceMvpLog.e("SERVICE", "ASR failed: ${it.message}", it)
-                if (audioDirect) { handleSegmentAudioDirect(wav); return }
-                return
-            }
-        if (text.isBlank()) {
-            if (audioDirect) handleSegmentAudioDirect(wav)
-            return
+        // ASR 3.1 可选增强（直听开关复用）：带标点+字级时间戳，失败回落 qwen3-asr-flash
+        val text = if (audioDirect) {
+            runCatching { VoiceMvpClient.transcribe31(dashKey, wav) }
+                .onFailure { VoiceMvpLog.w("SERVICE", "ASR31 失败，回落 qwen3: ${it.message}") }
+                .getOrElse { VoiceMvpClient.transcribe(dashKey, wav) }
+        } else {
+            VoiceMvpClient.transcribe(dashKey, wav)
         }
         val speaker = SpeakerEngine.recognize(memoryDb, seg)
         // 保存该说话人的最新录音样本，便于“身边的人”里试听辨认

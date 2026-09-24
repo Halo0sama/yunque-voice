@@ -305,6 +305,41 @@ object VoiceMvpClient {
 
     /* ───────────── 对外 API ───────────── */
 
+    /**
+     * 3.1-ASR 转写（maas.qianwenaiapi.com 原生协议）：返回润色后带标点的文本 + 字级时间戳句子。
+     * 实测格式：input.messages.content = [input_audio(data=URL或dataURI)] + 顶层 parameters.format。
+     */
+    suspend fun transcribe31(dashScopeKey: String, wav: File): String = withContext(Dispatchers.IO) {
+        val b64 = android.util.Base64.encodeToString(wav.readBytes(), android.util.Base64.NO_WRAP)
+        val body = JSONObject()
+            .put("model", "qwen-audio-3.1-asr-flash")
+            .put("input", JSONObject().put("messages", JSONArray().put(
+                JSONObject().put("role", "user").put("content", JSONArray().put(
+                    JSONObject().put("type", "input_audio").put("input_audio",
+                        JSONObject().put("data", "data:audio/wav;base64,$b64"))
+                ))
+            )))
+            .put("parameters", JSONObject().put("format", "wav").put("sample_rate", "16000"))
+        val resp = JSONObject(postJson(
+            "https://maas.qianwenaiapi.com/api/v1/services/aigc/multimodal-generation/generation",
+            dashScopeKey, body, "ASR31"
+        ))
+        val sentences = JSONArray()
+        resp.optJSONObject("output")?.optJSONObject("sentence")?.let { sentences.put(it) }
+        resp.optJSONObject("output")?.optJSONArray("sentences")?.let { arr ->
+            for (i in 0 until arr.length()) sentences.put(arr.getJSONObject(i))
+        }
+        val sb = StringBuilder()
+        for (i in 0 until sentences.length()) {
+            sb.append(sentences.getJSONObject(i).optString("text", ""))
+        }
+        if (sb.isBlank()) {
+            val t = resp.optJSONObject("output")?.optString("text", "").orEmpty()
+            require(t.isNotBlank()) { "ASR31 返回空文本" }
+            t
+        } else sb.toString()
+    }
+
     suspend fun transcribe(dashScopeKey: String, wav: File): String = withContext(Dispatchers.IO) {
         VoiceMvpLog.i("ASR", "开始识别: ${wav.absolutePath} size=${wav.length()}")
         val t0 = System.currentTimeMillis()
