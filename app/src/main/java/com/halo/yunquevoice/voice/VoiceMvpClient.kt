@@ -681,33 +681,52 @@ object VoiceMvpClient {
         return DirectDecision(heard, reply.ifBlank { null })
     }
 
-    suspend fun synthesize(dashScopeKey: String, text: String, out: File, voiceOverride: String? = null): Boolean =
-        withContext(Dispatchers.IO) {
-            val ttsVoice = voiceOverride?.takeIf { it.isNotBlank() } ?: TTS_VOICE
-            VoiceMvpLog.i("TTS", "开始合成: text=${text.take(200)} voice=$ttsVoice")
-            val t0 = System.currentTimeMillis()
-            val body = JSONObject()
-                .put("model", TTS_MODEL)
-                .put(
-                    "input",
-                    JSONObject()
-                        .put("text", text)
-                        .put("voice", ttsVoice)
-                        .put("format", "wav")
-                        .put("sample_rate", 24000)
-                )
-            val resp = JSONObject(postJson(TTS_URL, dashScopeKey, body, "TTS"))
-            val audio = resp.getJSONObject("output").getJSONObject("audio")
-            val url = audio.optString("url")
-            require(url.isNotBlank()) { "TTS 响应没有音频 URL" }
-            val req = Request.Builder().url(url).build()
-            client.newCall(req).execute().use { r ->
-                VoiceMvpLog.i("TTS", "下载音频 HTTP=${r.code} len=${r.body?.contentLength() ?: -1}")
-                if (!r.isSuccessful) throw IllegalStateException("下载音频失败 HTTP ${r.code}")
-                val bytes = r.body?.bytes() ?: throw IllegalStateException("音频为空")
-                out.writeBytes(bytes)
-            }
-            VoiceMvpLog.i("TTS", "合成完成 ${System.currentTimeMillis() - t0}ms file=${out.absolutePath} size=${out.length()}")
-            true
+    /**
+     * TTS 合成：ttsModel=3.1 时走 TTS-Next WebSocket（流式 mp3），否则走 3.0 HTTP 管线。
+     * 输出统一为 wav 容器（mp3 数据由 MediaPlayer 自动解码）。
+     */
+    suspend fun synthesize(
+        dashScopeKey: String,
+        text: String,
+        out: File,
+        voiceOverride: String? = null,
+        ttsModel: String = "qwen-audio-3.0-tts-flash"
+    ): Boolean = withContext(Dispatchers.IO) {
+        VoiceMvpLog.i("TTS", "开始合成: model=$ttsModel text=${text.take(200)}")
+        val t0 = System.currentTimeMillis()
+        if (ttsModel == "qwen-audio-3.1-tts-next") {
+            // TTS-Next：WebSocket 流式合成，输出 mp3
+            val mp3 = com.halo.yunquevoice.voice.TtsNextClient.synthesize(
+                dashScopeKey, text, File(out.parentFile, out.nameWithoutExtension + "_next.mp3")
+            ) ?: throw IllegalStateException("TTS-Next 合成失败")
+            mp3.copyTo(out, overwrite = true)
+            mp3.delete()
+            VoiceMvpLog.i("TTS", "TTS-Next 合成完成 ${System.currentTimeMillis() - t0}ms size=${out.length()}")
+            return@withContext true
         }
+        val ttsVoice = voiceOverride?.takeIf { it.isNotBlank() } ?: TTS_VOICE
+        val body = JSONObject()
+            .put("model", TTS_MODEL)
+            .put(
+                "input",
+                JSONObject()
+                    .put("text", text)
+                    .put("voice", ttsVoice)
+                    .put("format", "wav")
+                    .put("sample_rate", 24000)
+            )
+        val resp = JSONObject(postJson(TTS_URL, dashScopeKey, body, "TTS"))
+        val audio = resp.getJSONObject("output").getJSONObject("audio")
+        val url = audio.optString("url")
+        require(url.isNotBlank()) { "TTS 响应没有音频 URL" }
+        val req = Request.Builder().url(url).build()
+        client.newCall(req).execute().use { r ->
+            VoiceMvpLog.i("TTS", "下载音频 HTTP=${r.code} len=${r.body?.contentLength() ?: -1}")
+            if (!r.isSuccessful) throw IllegalStateException("下载音频失败 HTTP ${r.code}")
+            val bytes = r.body?.bytes() ?: throw IllegalStateException("音频为空")
+            out.writeBytes(bytes)
+        }
+        VoiceMvpLog.i("TTS", "合成完成 ${System.currentTimeMillis() - t0}ms file=${out.absolutePath} size=${out.length()}")
+        true
+    }
 }
