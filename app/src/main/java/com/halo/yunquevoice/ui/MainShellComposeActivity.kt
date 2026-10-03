@@ -157,9 +157,9 @@ class MainShellComposeActivity : ComponentActivity() {
         val openChatTab = androidx.compose.runtime.mutableStateOf(false)
     }
 
-    override fun onNewIntent(intent: android.content.Intent?) {
+    override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
-        if (intent?.getStringExtra("open_tab") == "chat") openChatTab.value = true
+        if (intent.getStringExtra("open_tab") == "chat") openChatTab.value = true
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

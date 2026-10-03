@@ -17,6 +17,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -111,6 +113,7 @@ fun YunqueGlassCard(
 }
 
 /** 统一主题入口：纸感/Monet/旧玻璃/玻璃17。 */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun GlassMaterialTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
@@ -224,9 +227,10 @@ fun GlassMaterialTheme(content: @Composable () -> Unit) {
                         }
                     )
             )
-            MaterialTheme(colorScheme = scheme, content = content)
+            // Material 3 Expressive：Expressive 动效 + 形状令牌，四种主题模式共用
+            MaterialExpressiveTheme(colorScheme = scheme, content = content)
         }
     } else {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialExpressiveTheme(colorScheme = scheme, content = content)
     }
 }

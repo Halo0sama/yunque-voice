@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.YunqueVoice" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.YunqueVoice" parent="Theme.Material3Expressive.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/lark_surface</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
@@ -23,7 +23,7 @@
         <item name="android:textColorSecondary">@color/lark_on_surface_variant</item>
     </style>
 
-    <style name="Theme.YunqueVoice.Monet" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar">
+    <style name="Theme.YunqueVoice.Monet" parent="Theme.Material3Expressive.DynamicColors.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
