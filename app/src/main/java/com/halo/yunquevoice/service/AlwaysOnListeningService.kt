@@ -71,6 +71,7 @@ class AlwaysOnListeningService : Service() {
         const val ACTION_TEST_COMPACTION = "com.halo.yunquevoice.action.TEST_COMPACTION"
         const val ACTION_TEST_DIAR = "com.halo.yunquevoice.action.TEST_DIAR"
         const val ACTION_APPLY_AUDIO = "com.halo.yunquevoice.action.APPLY_AUDIO"
+        const val ACTION_DUMP_RAW = "com.halo.yunquevoice.action.DUMP_RAW"
         const val ACTION_TEST_WIPE = "com.halo.yunquevoice.action.TEST_WIPE"
         const val ACTION_SPEAK_NOW = "com.halo.yunquevoice.action.SPEAK_NOW"
 
@@ -170,6 +171,9 @@ class AlwaysOnListeningService : Service() {
                 }
             }
             ACTION_STOP -> {
+                // 若本服务由 startForegroundService 拉起（静音规则的开始事件即 STOP 动作），
+                // 必须先完成前台化再停止，否则触发 ForegroundServiceDidNotStartInTimeException
+                startAsForeground()
                 Store.saveListeningWasRunning(this, false)
                 SoundCue.playStop()
                 YunqueApiServer.stop()
@@ -247,6 +251,42 @@ class AlwaysOnListeningService : Service() {
                 Store.clearInterruptions(this)
                 BailianMemory.clearOutbox(this)
                 VoiceMvpLog.i("SERVICE", "记忆内容已全部清空（含声纹=$withSpeakers；角色卡与设置保留）")
+            }
+            ACTION_DUMP_RAW -> {
+                // 排障工具：录 N 秒原始 PCM 落盘到公共 Download（供 Mac 拉取分析麦克风真实输入）
+                val seconds = intent?.getIntExtra("seconds", 60) ?: 60
+                scope.launch {
+                    val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS), "yunque_dump")
+                    dir.mkdirs()
+                    val out = java.io.File(dir, "raw_${System.currentTimeMillis()}.wav")
+                    val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+                    val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, max(minBuf, SAMPLE_RATE * 2 * 2))
+                    rec.startRecording()
+                    VoiceMvpLog.i("SERVICE", "DUMP_RAW 开始 ${seconds}s 读取中")
+                    val pcm = ByteArrayOutputStream()
+                    val buf = ByteArray(SAMPLE_RATE * 2)
+                    val deadline = System.currentTimeMillis() + seconds * 1000L
+                    while (System.currentTimeMillis() < deadline) {
+                        val n = rec.read(buf, 0, buf.size)
+                        if (n > 0) pcm.write(buf, 0, n)
+                    }
+                    rec.stop(); rec.release()
+                    // 写 WAV 头
+                    val pcmBytes = pcm.toByteArray()
+                    val header = ByteArray(44)
+                    val totalLen = pcmBytes.size + 36
+                    fun putLE(off: Int, v: Int) { for (i in 0..3) header[off+i] = (v shr (8*i)).toByte() }
+                    "RIFF".toByteArray().copyInto(header, 0)
+                    putLE(4, totalLen); "WAVE".toByteArray().copyInto(header, 8)
+                    "fmt ".toByteArray().copyInto(header, 12); putLE(16, 16); putLE(20, 1)
+                    putLE(22, 1); putLE(24, SAMPLE_RATE); putLE(28, SAMPLE_RATE*2)
+                    putLE(32, 2); putLE(34, 16)
+                    "data".toByteArray().copyInto(header, 36); putLE(40, pcmBytes.size)
+                    out.outputStream().use { it.write(header); it.write(pcmBytes) }
+                    VoiceMvpLog.i("SERVICE", "DUMP_RAW 完成: ${out.absolutePath} (${out.length()/1024}KB)")
+                }
             }
             ACTION_TEST_UPLOAD -> {
                 val key = Store.dashScopeKey(this)

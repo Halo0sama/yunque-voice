@@ -36,7 +36,7 @@ object TtsNextClient {
      * @param voice 音色名（3.1-tts-next 为创作型模型，音色由模型按内容自动演绎）
      * @return 成功返回 outFile，失败返回 null
      */
-    fun synthesize(apiKey: String, text: String, outFile: File, timeoutSec: Long = 60): File? {
+    fun synthesize(apiKey: String, text: String, outFile: File, voice: String = "longanxiaoxin", timeoutSec: Long = 60): File? {
         val taskId = UUID.randomUUID().toString().replace("-", "")
         val latch = CountDownLatch(1)
         var failed: String? = null

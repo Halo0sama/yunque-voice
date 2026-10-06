@@ -26,7 +26,15 @@ class ScheduleReceiver : BroadcastReceiver() {
         fun svc(start: Boolean) {
             val i = Intent(context, AlwaysOnListeningService::class.java)
                 .setAction(if (start) AlwaysOnListeningService.ACTION_START else AlwaysOnListeningService.ACTION_STOP)
-            if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
+            // STOP 也可能经由 startForegroundService 启动（静音规则的开始事件）：
+            // 若服务尚未前台化，一律先 startForegroundService 保证系统放行，
+            // 服务内部 ACTION_STOP 会 stopSelf，满足 5 秒前台要求的路径已由 START 分支覆盖。
+            if (start || AlwaysOnListeningService.isRunning) {
+                if (android.os.Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
+            } else {
+                // 服务未在运行且动作是停止：无需启动服务，仅清标记
+                com.halo.yunquevoice.voice.Store.saveListeningWasRunning(context, false)
+            }
         }
         when {
             // 停止聆听：开始→停（清 STICKY 标记防复活）；结束→恢复开启
